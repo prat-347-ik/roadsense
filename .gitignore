@@ -9,3 +9,4 @@ node_modules/
 dist/
 frontend/.vite/
 backend/venv/
+.vscode/settings.json
