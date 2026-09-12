@@ -62,6 +62,8 @@ def test_scenario_1_corroborated_real_incident():
     assert result.displacement_meters > 50.0
     assert result.speed_mps > 1.0
     assert result.bearing_deg is not None
+    obs1.wrong_way_status = "confirmed"
+    obs2.wrong_way_status = "confirmed"
 
     # 2. Cluster observations
     clusters = cluster_observations([obs1, obs2], violation_type="wrong_side", cluster_radius_meters=150.0)
@@ -142,6 +144,65 @@ def test_scenario_2_parked_car_false_positive():
     assert "Stationary target" in result.details
 
 
+def test_scenario_2b_single_device_multi_burst_not_corroborated():
+    """Scenario 2b: Single device sending multiple bursts (e.g. parked car or single camera).
+
+    Assert evaluate_evidence_trigger on a cluster with a single device (even with 2+ observations)
+    strictly returns CANDIDATE and does NOT trigger evidence collection.
+    """
+    plate_hash = hash_plate("DL01PARKED1")
+    t0 = datetime(2026, 9, 12, 12, 0, 0, tzinfo=timezone.utc)
+    t1 = t0 + timedelta(seconds=15)
+    t2 = t0 + timedelta(seconds=45)
+
+    obs1 = ObservationPoint(
+        lat=28.6139,
+        lon=77.2090,
+        ts=t0,
+        device_id="cam-parking-01",
+        event_nonce=str(uuid.uuid4()),
+        hashed_plate=plate_hash,
+        wrong_way_status="confirmed",
+    )
+    obs2 = ObservationPoint(
+        lat=28.613905,
+        lon=77.209005,
+        ts=t1,
+        device_id="cam-parking-01",
+        event_nonce=str(uuid.uuid4()),
+        hashed_plate=plate_hash,
+        wrong_way_status="confirmed",
+    )
+    obs3 = ObservationPoint(
+        lat=28.613902,
+        lon=77.209001,
+        ts=t2,
+        device_id="cam-parking-01",
+        event_nonce=str(uuid.uuid4()),
+        hashed_plate=plate_hash,
+        wrong_way_status="confirmed",
+    )
+
+    # 1. Cluster all 3 observations from the single device
+    clusters = cluster_observations([obs1, obs2, obs3], violation_type="wrong_side")
+    assert len(clusters) == 1
+    cluster = clusters[0]
+    assert len(cluster.observations) == 3
+    assert len(cluster.device_ids) == 1
+    assert cluster.device_ids == {"cam-parking-01"}
+
+    # 2. Evaluate evidence trigger - MUST NOT corroborate (requires multiple independent devices)
+    decision = evaluate_evidence_trigger(
+        cluster,
+        corroboration_threshold_devices=2,
+        corroboration_threshold_observations=2,
+    )
+    assert decision.incident_status == IncidentClusteringStatus.CANDIDATE
+    assert decision.should_request_evidence is False
+    assert len(decision.evidence_requests) == 0
+    assert "Candidate only: 1 confirmed device(s)" in decision.reason
+
+
 # ----------------------------------------------------------------------
 # Scenario 3: Overtaking-Artifact False Positive (Reachable & Explicit)
 # ----------------------------------------------------------------------
@@ -201,6 +262,66 @@ def test_scenario_3b_inconsistent_out_and_back_path_rejected():
     assert result.status == ProgressionStatus.REJECTED
     assert result.reason == RejectionReason.INCONSISTENT_TRAJECTORY
     assert "Inconsistent trajectory" in result.details
+
+
+def test_scenario_3d_multi_device_rejected_trajectory_forces_rejected_incident_status():
+    """Regression: 2+ devices on an inconsistent trajectory must not corroborate.
+
+    Reuses the out-and-back points from test_scenario_3b. Device count must not
+    override a REJECTED progression verdict — the incident stays rejected.
+    """
+    plate_hash = hash_plate("MH12ERRATIC")
+    t0 = datetime(2026, 9, 12, 11, 0, 0, tzinfo=timezone.utc)
+
+    # 4 distinct devices reporting the erratic trajectory
+    p1 = ObservationPoint(lat=18.5200, lon=73.8560, ts=t0, device_id="cam-1", event_nonce=str(uuid.uuid4()), hashed_plate=plate_hash)
+    p2 = ObservationPoint(lat=18.5210, lon=73.8560, ts=t0 + timedelta(seconds=10), device_id="cam-2", event_nonce=str(uuid.uuid4()), hashed_plate=plate_hash)
+    p3 = ObservationPoint(lat=18.5202, lon=73.8560, ts=t0 + timedelta(seconds=20), device_id="cam-3", event_nonce=str(uuid.uuid4()), hashed_plate=plate_hash)
+    p4 = ObservationPoint(lat=18.5215, lon=73.8560, ts=t0 + timedelta(seconds=30), device_id="cam-4", event_nonce=str(uuid.uuid4()), hashed_plate=plate_hash)
+
+    # 1. Progression evaluates trajectory and rejects it as inconsistent
+    prog_result = evaluate_wrong_way_progression(p4, [p1, p2, p3], max_bearing_deviation_deg=60.0)
+    assert prog_result.status == ProgressionStatus.REJECTED
+
+    # Update points with rejection status
+    p1.wrong_way_status = "rejected"
+    p2.wrong_way_status = "rejected"
+    p3.wrong_way_status = "rejected"
+    p4.wrong_way_status = "rejected"
+
+    # 2. Cluster observations
+    clusters = cluster_observations([p1, p2, p3, p4], violation_type="wrong_side", cluster_radius_meters=300.0)
+    assert len(clusters) == 1
+    cluster = clusters[0]
+    assert len(cluster.observations) == 4
+    assert len(cluster.device_ids) == 4  # 4 distinct devices!
+
+    # 3. Evidence trigger must reject the incident despite 4 devices
+    decision = evaluate_evidence_trigger(cluster, corroboration_threshold_devices=2, corroboration_threshold_observations=2)
+    assert decision.incident_status == IncidentClusteringStatus.REJECTED
+    assert decision.should_request_evidence is False
+    assert len(decision.evidence_requests) == 0
+    assert "Incident rejected" in decision.reason
+
+
+def test_unconfirmed_multi_device_cluster_stays_candidate():
+    """UNCONFIRMED wrong-side observations must not corroborate even with 2+ devices."""
+    plate_hash = hash_plate("DL05SLOWCORROB")
+    t0 = datetime(2026, 9, 12, 15, 0, 0, tzinfo=timezone.utc)
+    p1 = ObservationPoint(
+        lat=28.6139, lon=77.2090, ts=t0, device_id="cam-south-gate",
+        event_nonce=str(uuid.uuid4()), hashed_plate=plate_hash, wrong_way_status="unconfirmed",
+    )
+    p2 = ObservationPoint(
+        lat=28.6145, lon=77.2090, ts=t0 + timedelta(seconds=10), device_id="cam-north-gate",
+        event_nonce=str(uuid.uuid4()), hashed_plate=plate_hash, wrong_way_status="unconfirmed",
+    )
+    clusters = cluster_observations([p1, p2], violation_type="wrong_side")
+    assert len(clusters) == 1
+    assert len(clusters[0].device_ids) == 2
+    decision = evaluate_evidence_trigger(clusters[0], corroboration_threshold_devices=2)
+    assert decision.incident_status == IncidentClusteringStatus.CANDIDATE
+    assert decision.should_request_evidence is False
 
 
 def test_scenario_3c_widely_spaced_real_observations_unconfirmed():

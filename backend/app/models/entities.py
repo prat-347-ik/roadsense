@@ -129,6 +129,7 @@ class Evidence(Base):
     )
     device_id = Column(String(128), ForeignKey("devices.device_id"), primary_key=True)
     event_nonce = Column(String(128), primary_key=True)
+    requested_at = Column(DateTime(timezone=True), nullable=True)
     uploaded_at = Column(DateTime(timezone=True), nullable=True)
     storage_ref = Column(Text, nullable=True)
     retention_expires_at = Column(DateTime(timezone=True), nullable=True)

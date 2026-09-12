@@ -8,6 +8,11 @@ from app.services.geo import encode_geohash, haversine_distance_meters
 from app.services.progression import ObservationPoint
 
 
+def _is_rejected_wrong_way(status: Optional[str]) -> bool:
+    """True for 'rejected' and reason-suffixed values such as 'rejected(parked)'."""
+    return status == "rejected" or (status is not None and status.startswith("rejected"))
+
+
 class IncidentClusteringStatus(str, Enum):
     CANDIDATE = "candidate"
     CORROBORATED = "corroborated"
@@ -56,6 +61,11 @@ def cluster_observations(
     """Group observations agreeing on violation_type, hashed plate_no, spatial proximity, and time window.
 
     Pure function with configurable clustering thresholds.
+
+    This grouping is status-blind: unconfirmed and rejected wrong-side observations
+    remain in the cluster so evaluate_evidence_trigger() can refuse corroboration
+    and force a rejected incident. They must not be treated as corroborating
+    evidence — that policy lives in evaluate_evidence_trigger().
     """
     radius = cluster_radius_meters or settings.CLUSTER_RADIUS_METERS
     window_sec = time_window_seconds or float(settings.CORROBORATION_TIME_WINDOW_SECONDS)
@@ -128,31 +138,56 @@ def evaluate_evidence_trigger(
     now: datetime | None = None,
 ) -> EvidenceTriggerDecision:
     """Evaluate whether an observation cluster has crossed the corroboration threshold
-
     to trigger evidence collection from source devices.
     """
     current_time = now or datetime.now(timezone.utc)
     ttl_days = evidence_ttl_days or settings.EVIDENCE_TTL_DAYS
     retention_expiration = current_time + timedelta(days=ttl_days)
 
-    unique_devices = len(cluster.device_ids)
-    obs_count = len(cluster.observations)
+    # 1. A rejected wrong-side progression verdict (parked, unrealistic_speed,
+    # inconsistent_trajectory, overtaking_artifact) rejects the whole incident.
+    # Another device reporting the same rejected path must not corroborate it.
+    if cluster.violation_type == "wrong_side":
+        has_rejected = any(
+            _is_rejected_wrong_way(obs.wrong_way_status)
+            for obs in cluster.observations
+        )
+        if has_rejected:
+            return EvidenceTriggerDecision(
+                incident_status=IncidentClusteringStatus.REJECTED,
+                should_request_evidence=False,
+                reason="Incident rejected: contains rejected wrong-side progression observation.",
+            )
 
-    # Condition for corroboration: either multiple distinct reporting devices
-    # or confirmed multiple observations crossing threshold
+    # 2. Only confirmed wrong-side observations (and all red-light observations,
+    # which skip the progression filter) count toward unique_devices / obs_count.
+    # UNCONFIRMED wrong-side observations leave the incident as candidate.
+    if cluster.violation_type == "wrong_side":
+        valid_obs = [
+            obs for obs in cluster.observations
+            if obs.wrong_way_status == "confirmed"
+        ]
+    else:
+        valid_obs = cluster.observations
+
+    valid_devices = {obs.device_id for obs in valid_obs}
+    unique_devices = len(valid_devices)
+    obs_count = len(valid_obs)
+
+    # Condition for corroboration: require multiple distinct devices *and* multiple confirmed observations
     is_corroborated = (
         unique_devices >= corroboration_threshold_devices
-        or obs_count >= corroboration_threshold_observations
+        and obs_count >= corroboration_threshold_observations
     )
 
     if not is_corroborated:
         return EvidenceTriggerDecision(
             incident_status=IncidentClusteringStatus.CANDIDATE,
             should_request_evidence=False,
-            reason=f"Candidate only: {unique_devices} device(s), {obs_count} observation(s).",
+            reason=f"Candidate only: {unique_devices} confirmed device(s), {obs_count} confirmed observation(s).",
         )
 
-    # Generate evidence requests for each unique device observation
+    # Generate evidence requests for each valid observation
     evidence_requests = [
         EvidenceRequestTarget(
             device_id=obs.device_id,
@@ -161,7 +196,7 @@ def evaluate_evidence_trigger(
             requested_at=current_time,
             retention_expires_at=retention_expiration,
         )
-        for obs in cluster.observations
+        for obs in valid_obs
     ]
 
     return EvidenceTriggerDecision(

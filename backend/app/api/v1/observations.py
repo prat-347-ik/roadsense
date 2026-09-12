@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import insert, select
+from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -17,6 +17,7 @@ from app.models.entities import (
 )
 from app.schemas.observation import ObservationBurstRequest, ObservationResponse
 from app.services.clustering import (
+    IncidentClusteringStatus,
     cluster_observations,
     evaluate_evidence_trigger,
 )
@@ -108,13 +109,23 @@ async def create_observation(
         eval_result = evaluate_wrong_way_progression(new_point, prior_points)
         wrong_way_status = eval_result.status.value
 
+        # If trajectory is confirmed or rejected, update priors so clustering evaluates the whole trajectory consistently
+        if eval_result.status in (ProgressionStatus.CONFIRMED, ProgressionStatus.REJECTED):
+            for p in priors:
+                p.wrong_way_status = eval_result.status.value
+
     # 6. Persist observation (location formatted as WKT Point)
     location_wkt = f"SRID=4326;POINT({payload.lon} {payload.lat})"
+    location_val = (
+        func.ST_GeogFromText(location_wkt)
+        if db.bind.dialect.name == "postgresql"
+        else location_wkt
+    )
     observation = Observation(
         device_id=payload.device_id,
         violation_type=payload.violation_type,
         plate_no=hashed_plate,  # Only the hashed value is saved
-        location=location_wkt,
+        location=location_val,
         lat=payload.lat,
         lon=payload.lon,
         ts=payload.timestamp,
@@ -164,11 +175,18 @@ async def create_observation(
 
         trigger_decision = evaluate_evidence_trigger(cluster)
 
+        geo_cluster_wkt = f"SRID=4326;POINT({cluster.centroid_lon} {cluster.centroid_lat})"
+        geo_cluster_val = (
+            func.ST_GeogFromText(geo_cluster_wkt)
+            if db.bind.dialect.name == "postgresql"
+            else geo_cluster_wkt
+        )
+
         if not incident:
             incident = CandidateIncident(
                 violation_type=payload.violation_type,
                 plate_no=hashed_plate,
-                geo_cluster=f"SRID=4326;POINT({cluster.centroid_lon} {cluster.centroid_lat})",
+                geo_cluster=geo_cluster_val,
                 window_start=cluster.window_start,
                 window_end=cluster.window_end,
                 status=trigger_decision.incident_status.value,
@@ -178,7 +196,9 @@ async def create_observation(
         else:
             incident.window_start = min(incident.window_start, cluster.window_start)
             incident.window_end = max(incident.window_end, cluster.window_end)
-            if incident.status == "candidate" and trigger_decision.should_request_evidence:
+            if trigger_decision.incident_status == IncidentClusteringStatus.REJECTED:
+                incident.status = "rejected"
+            elif incident.status == "candidate" and trigger_decision.should_request_evidence:
                 incident.status = trigger_decision.incident_status.value
 
         # Link observation to incident in association table
@@ -196,8 +216,11 @@ async def create_observation(
                 )
             )
 
-        # Trigger evidence collection if corroborated
-        if trigger_decision.should_request_evidence:
+        # Trigger evidence collection if corroborated (never after a rejection)
+        if (
+            trigger_decision.should_request_evidence
+            and incident.status != IncidentClusteringStatus.REJECTED.value
+        ):
             for req_target in trigger_decision.evidence_requests:
                 ev_stmt = select(Evidence).where(
                     Evidence.incident_id == incident.id,
@@ -210,6 +233,7 @@ async def create_observation(
                         incident_id=incident.id,
                         device_id=req_target.device_id,
                         event_nonce=req_target.event_nonce,
+                        requested_at=req_target.requested_at,
                         retention_expires_at=req_target.retention_expires_at,
                     )
                     db.add(ev_record)

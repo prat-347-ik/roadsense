@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     CORROBORATION_TIME_WINDOW_SECONDS: int = 300
     EVIDENCE_TTL_DAYS: int = 30
 
+    # Scheduled sweep intervals (APScheduler)
+    SWEEP_INTERVAL_SECONDS: int = 60          # stale-observation sweep cadence
+    EVIDENCE_TTL_CHECK_INTERVAL_SECONDS: int = 3600  # evidence-TTL sweep cadence
+
     SENTRY_DSN: Optional[str] = None
 
     model_config = SettingsConfigDict(
