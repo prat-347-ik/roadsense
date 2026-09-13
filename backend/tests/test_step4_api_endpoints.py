@@ -1,6 +1,6 @@
 import io
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -335,3 +335,86 @@ async def test_evidence_polling_and_upload_flow():
         # 3. Subsequent poll returns 0 pending items
         poll_resp2 = await ac.get(f"/v1/evidence-requests?device_id={device_id}")
         assert len(poll_resp2.json()) == 0
+
+
+@pytest.mark.asyncio
+async def test_stale_sweep_ignores_solitary_red_light_observations(monkeypatch):
+    from app.services import sweeps
+
+    stale_ts = datetime.now(timezone.utc) - timedelta(minutes=10)
+    wrong_side_incident = CandidateIncident(
+        violation_type="wrong_side",
+        plate_no=hash_plate("KA01AB1111"),
+        window_start=stale_ts,
+        window_end=stale_ts,
+        status="candidate",
+    )
+    red_light_incident = CandidateIncident(
+        violation_type="red_light",
+        plate_no=hash_plate("KA01AB2222"),
+        window_start=stale_ts,
+        window_end=stale_ts,
+        status="candidate",
+    )
+    wrong_side_observation = Observation(
+        device_id="cam-sweep-wrong-side",
+        violation_type="wrong_side",
+        plate_no=wrong_side_incident.plate_no,
+        lat=18.5204,
+        lon=73.8567,
+        location="POINT(73.8567 18.5204)",
+        ts=stale_ts,
+        event_nonce=str(uuid.uuid4()),
+        signature="sig",
+    )
+    red_light_observation = Observation(
+        device_id="cam-sweep-red-light",
+        violation_type="red_light",
+        plate_no=red_light_incident.plate_no,
+        lat=18.5205,
+        lon=73.8568,
+        location="POINT(73.8568 18.5205)",
+        ts=stale_ts,
+        event_nonce=str(uuid.uuid4()),
+        signature="sig",
+    )
+
+    async with TestAsyncSession() as db:
+        db.add_all(
+            [
+                Device(device_id="cam-sweep-wrong-side", public_key="pubkey"),
+                Device(device_id="cam-sweep-red-light", public_key="pubkey"),
+                wrong_side_incident,
+                red_light_incident,
+                wrong_side_observation,
+                red_light_observation,
+            ]
+        )
+        wrong_side_incident.observations.append(wrong_side_observation)
+        red_light_incident.observations.append(red_light_observation)
+        await db.commit()
+        wrong_side_incident_id = wrong_side_incident.id
+        red_light_incident_id = red_light_incident.id
+        red_light_observation_id = red_light_observation.id
+
+    monkeypatch.setattr(sweeps, "get_session_factory", lambda: TestAsyncSession)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.post(
+            "/v1/internal/sweep/stale-observations?time_window_seconds=300"
+        )
+
+    assert response.status_code == 200
+    summary = response.json()
+    assert summary["rejected"] == 1
+    assert summary["errors"] == 0
+    assert summary["failed"] == []
+
+    async with TestAsyncSession() as db:
+        wrong_side = await db.get(CandidateIncident, wrong_side_incident_id)
+        red_light = await db.get(CandidateIncident, red_light_incident_id)
+        red_light_observation = await db.get(Observation, red_light_observation_id)
+
+    assert wrong_side.status == "rejected"
+    assert red_light.status == "candidate"
+    assert red_light_observation.wrong_way_status is None

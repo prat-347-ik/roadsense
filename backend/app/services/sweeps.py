@@ -87,35 +87,45 @@ async def sweep_stale_observations(
     rejected_count = 0
     skipped_count = 0
     error_count = 0
+    failed: list[dict[str, object]] = []
 
     async with await _get_db_session() as db:
-        try:
-            # Find candidate incidents older than the corroboration window that
-            # have only a single linked observation (no second corroboration arrived).
-            stmt = (
-                select(CandidateIncident)
-                .options(selectinload(CandidateIncident.observations))
-                .where(
-                    CandidateIncident.status == "candidate",
-                    CandidateIncident.window_end <= cutoff,
-                )
-            )
-            result = await db.execute(stmt)
-            incidents: List[CandidateIncident] = result.scalars().all()
+        # Filter at the incident level so red-light observations never enter
+        # progression evaluation or acquire a wrong_way_status.
+        stmt = select(CandidateIncident.id).where(
+            CandidateIncident.status == "candidate",
+            CandidateIncident.violation_type == "wrong_side",
+            CandidateIncident.window_end <= cutoff,
+        )
+        result = await db.execute(stmt)
+        incident_ids = result.scalars().all()
 
-            for incident in incidents:
+    for incident_id in incident_ids:
+        try:
+            async with await _get_db_session() as db:
+                stmt = (
+                    select(CandidateIncident)
+                    .options(selectinload(CandidateIncident.observations))
+                    .where(CandidateIncident.id == incident_id)
+                )
+                incident = (await db.execute(stmt)).scalar_one_or_none()
+                if incident is None or incident.status != "candidate":
+                    skipped_count += 1
+                    continue
+
                 obs_list = incident.observations
-                if len(obs_list) != 1:
-                    # Multiple observations — not a solitary unconfirmed flag.
-                    # This incident stays candidate; clustering will handle it.
+                if len(obs_list) != 1 or obs_list[0].violation_type != "wrong_side":
                     skipped_count += 1
                     continue
 
                 obs_orm = obs_list[0]
+                observation_ts = obs_orm.ts
+                if observation_ts.tzinfo is None:
+                    observation_ts = observation_ts.replace(tzinfo=timezone.utc)
                 obs_point = ObservationPoint(
                     lat=obs_orm.lat,
                     lon=obs_orm.lon,
-                    ts=obs_orm.ts,
+                    ts=observation_ts,
                     device_id=obs_orm.device_id,
                     event_nonce=obs_orm.event_nonce,
                     hashed_plate=obs_orm.plate_no,
@@ -130,6 +140,7 @@ async def sweep_stale_observations(
                 if stale_result.status == ProgressionStatus.REJECTED:
                     obs_orm.wrong_way_status = "rejected"
                     incident.status = "rejected"
+                    await db.commit()
                     rejected_count += 1
                     logger.info(
                         "Stale sweep: rejected incident %d (observation %d) as %s — %s",
@@ -140,13 +151,10 @@ async def sweep_stale_observations(
                     )
                 else:
                     skipped_count += 1
-
-            await db.commit()
-
         except Exception as exc:
-            logger.exception("sweep_stale_observations failed: %s", exc)
             error_count += 1
-            await db.rollback()
+            failed.append({"incident_id": incident_id, "error": str(exc)})
+            logger.exception("Stale sweep failed for incident %d: %s", incident_id, exc)
 
     summary = {
         "job": "sweep_stale_observations",
@@ -154,6 +162,7 @@ async def sweep_stale_observations(
         "rejected": rejected_count,
         "skipped": skipped_count,
         "errors": error_count,
+        "failed": failed,
     }
     logger.info("sweep_stale_observations completed: %s", summary)
     return summary
@@ -184,32 +193,38 @@ async def sweep_evidence_ttl(
     transitioned_count = 0
     skipped_count = 0
     error_count = 0
+    failed: list[dict[str, object]] = []
 
     async with await _get_db_session() as db:
+        stmt = select(CandidateIncident.id).where(
+            CandidateIncident.status == "corroborated"
+        )
+        result = await db.execute(stmt)
+        incident_ids = result.scalars().all()
+
+    now = datetime.now(timezone.utc)
+    for incident_id in incident_ids:
         try:
-            stmt = (
-                select(CandidateIncident)
-                .options(selectinload(CandidateIncident.evidence_items))
-                .where(CandidateIncident.status == "corroborated")
-            )
-            result = await db.execute(stmt)
-            incidents: List[CandidateIncident] = result.scalars().all()
+            async with await _get_db_session() as db:
+                stmt = (
+                    select(CandidateIncident)
+                    .options(selectinload(CandidateIncident.evidence_items))
+                    .where(CandidateIncident.id == incident_id)
+                )
+                incident = (await db.execute(stmt)).scalar_one_or_none()
+                if incident is None or incident.status != "corroborated":
+                    skipped_count += 1
+                    continue
 
-            now = datetime.now(timezone.utc)
-
-            for incident in incidents:
                 ev_items = incident.evidence_items
                 expected = len(ev_items)
 
                 if expected == 0:
-                    # No evidence was requested — nothing to time out.
                     skipped_count += 1
                     continue
 
                 uploaded = sum(1 for ev in ev_items if ev.uploaded_at is not None)
 
-                # Determine earliest evidence requested_at timestamp directly from the evidence items.
-                # Fall back to retention_expires_at - ttl or window_end only if requested_at is not populated.
                 earliest_request_time: datetime | None = None
                 for ev in ev_items:
                     req_time = ev.requested_at
@@ -233,6 +248,7 @@ async def sweep_evidence_ttl(
 
                 if new_status == IncidentClusteringStatus.CORROBORATED_NO_EVIDENCE:
                     incident.status = new_status.value
+                    await db.commit()
                     transitioned_count += 1
                     logger.info(
                         "Evidence TTL sweep: incident %d transitioned to corroborated_no_evidence "
@@ -244,13 +260,10 @@ async def sweep_evidence_ttl(
                     )
                 else:
                     skipped_count += 1
-
-            await db.commit()
-
         except Exception as exc:
-            logger.exception("sweep_evidence_ttl failed: %s", exc)
             error_count += 1
-            await db.rollback()
+            failed.append({"incident_id": incident_id, "error": str(exc)})
+            logger.exception("Evidence TTL sweep failed for incident %d: %s", incident_id, exc)
 
     summary = {
         "job": "sweep_evidence_ttl",
@@ -258,6 +271,7 @@ async def sweep_evidence_ttl(
         "transitioned_to_no_evidence": transitioned_count,
         "skipped": skipped_count,
         "errors": error_count,
+        "failed": failed,
     }
     logger.info("sweep_evidence_ttl completed: %s", summary)
     return summary
