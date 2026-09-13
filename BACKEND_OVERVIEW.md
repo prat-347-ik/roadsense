@@ -1,212 +1,457 @@
-# RoadSense Backend Overview
+# RoadSense Backend Overview & Dashboard Integration Guide
 
-## 1. What this system does
+This document is the technical source of truth for frontend teammates building the **Step 7 Reviewer Dashboard** against the RoadSense backend. It reflects the exact, verified state of the codebase.
 
-RoadSense receives bursts from dashcams that report two violation categories: `red_light` and `wrong_side`. Each burst includes a device ID, a license plate, a location, a capture timestamp, an event nonce, and a signature. The backend immediately normalizes and HMAC-hashes the plate, so raw plate text is not persisted or returned. It uses the event nonce to reject duplicate submissions.
+---
 
-For `wrong_side`, the backend checks whether observations over time describe a plausible moving trajectory. It groups related observations by hashed plate, violation type, time, and location, then requires independent corroboration before requesting video evidence. `red_light` observations skip the progression check but still need the corroboration thresholds. Evidence is stored in MinIO when a device uploads it.
+## 1. What This System Does
 
-A reviewer uses the incident API to inspect the observations and evidence, then approves or rejects the incident. Approval changes the incident to `confirmed`; rejection changes it to `rejected`. Nothing is auto-enforced: reviewer action is the authoritative decision.
+RoadSense is an automated traffic violation corroboration and human-in-the-loop review platform. Edge devices (such as dashcams and smart intersection sensors) monitor traffic and transmit lightweight metadata bursts whenever they detect potential traffic infractions—specifically **red-light violations** and **wrong-side driving**.
 
-## 2. Architecture at a glance
+To eliminate false positives from edge-sensor glitches, momentary overtakes, or parked vehicles, the backend ingests these raw bursts, enforces strict privacy boundaries, and clusters observations spatio-temporally. For wrong-side violations, the system analyzes vehicle trajectory consistency and velocity progression. Only when independent devices corroborate a genuine violation does the backend trigger video evidence retrieval from the reporting edge devices.
 
-- **FastAPI app**: serves the `/health` endpoint, reviewer API, device observation/evidence API, and internal sweep triggers. APScheduler runs inside this process.
-- **Postgres + PostGIS**: persists devices, observations, incidents, incident/observation links, evidence metadata, and reviewers; PostGIS stores observation and incident cluster points.
-- **Redis**: exposed and configured through `REDIS_URL`, but the current application does not use it.
-- **MinIO**: stores uploaded video/image evidence; the API returns a presigned `view_url` for stored evidence.
-- **APScheduler**: runs the stale-observation sweep every 60 seconds and evidence-TTL sweep every 3600 seconds by default.
+**Critical Policy**: The system **never auto-enforces violations**. The backend acts strictly as an evidentiary pipeline. Every corroborated incident requires explicit human verification via the Reviewer Dashboard, where an authorized reviewer inspects video evidence, trajectory points, and telemetry before choosing to approve or reject the incident.
 
-## 3. Data model
+---
 
-The migration creates the following tables. Plate values in both `observations` and `candidate_incidents` are HMAC-SHA256 hex strings, never raw plate text.
+## 2. Architecture at a Glance
 
-### `devices`
+- **FastAPI**: Asynchronous Python API server managing device observation ingestion, reviewer authentication, incident lifecycle state transitions, and presigned media URL delivery.
+- **PostgreSQL + PostGIS**: Relational datastore storing devices, hashed observations, candidate incidents, and evidence records with spatial PostGIS geometry/geography indexing.
+- **Redis**: High-speed in-memory store provisioned for pub/sub, burst deduplication, and rate limiting infrastructure.
+- **MinIO**: High-performance S3-compatible object storage for securely storing uploaded video and image evidence clips and serving time-limited presigned viewing URLs.
+- **APScheduler (AsyncIOScheduler)**: Embedded background scheduler running directly inside the FastAPI process lifespan. Chosen over Celery Beat at this stage because it eliminates the operational overhead of running extra worker/beat daemon processes and extra broker dependencies while sharing the async SQLAlchemy connection pool for lightweight periodic database sweeps.
 
-- `device_id`: string primary key; stable identifier of the reporting dashcam.
-- `public_key`: text; intended public key for device signature verification. New devices are auto-registered with the placeholder `stub_public_key`.
-- `trust_score`: float; device trust value, default `0.5`. It is stored but is not currently used in corroboration decisions.
-- `registered_at`: timezone-aware timestamp; when the device record was created.
-- `status`: string; device state. Database values are constrained to `active`, `suspended`, or `revoked`; new auto-registered devices are `active`.
+---
 
-### `observations`
+## 3. Data Model
 
-- `id`: integer/bigint primary key; internal observation identifier.
-- `device_id`: foreign key to `devices.device_id`; which dashcam reported the burst.
-- `violation_type`: `wrong_side` or `red_light`.
-- `plate_no`: text; HMAC-SHA256 hash of the normalized plate. It lets reports for the same plate be correlated without retaining the raw plate.
-- `lat`: float; latitude in decimal degrees.
-- `lon`: float; longitude in decimal degrees.
-- `location`: PostGIS `geography(Point, 4326)` in Postgres, represented as a WKT point when using the SQLite test path; spatial point used for location clustering/indexing.
-- `ts`: timezone-aware timestamp; capture time supplied by the device.
-- `event_nonce`: unique string/UUID; idempotency key for the burst.
-- `signature`: text; submitted device signature. Verification is currently a stub that accepts any non-empty signature.
-- `wrong_way_status`: nullable string. For `wrong_side`, it is `unconfirmed`, `confirmed`, or `rejected`; `red_light` leaves it null. A rejected progression can have a reason in the service result, but the persisted field is currently just `rejected`.
+All primary entities use `BigInteger` auto-incrementing primary keys (mapped to `Integer` under SQLite testing) and UTC timestamps.
 
-### `candidate_incidents`
+### Database Tables & Schema Rationale
 
-- `id`: integer/bigint primary key; incident identifier used by dashboard routes.
-- `violation_type`: `wrong_side` or `red_light`.
-- `plate_no`: text; HMAC-SHA256 plate hash shared by the linked observations.
-- `geo_cluster`: PostGIS `geography(Point, 4326)`; centroid of the observation cluster. It is nullable in the ORM model but created as non-null in the initial Postgres migration.
-- `window_start`: timezone-aware timestamp; earliest observation in the cluster.
-- `window_end`: timezone-aware timestamp; latest observation in the cluster.
-- `status`: one of `candidate`, `corroborated`, `corroborated_no_evidence`, `confirmed`, or `rejected`.
-- `reviewed_by`: nullable foreign key to `reviewers.id`; reviewer who made the final approve/reject action.
-- `reviewed_at`: nullable timestamp; when that reviewer action happened.
-
-Status meanings and normal movement:
-
-- `candidate`: observations are grouped, but corroboration thresholds have not been met. The dashboard should show this as awaiting more corroboration.
-- `corroborated`: at least two distinct devices and at least two eligible observations agree; evidence records have been requested or are pending. This is reviewable while evidence is pending.
-- `corroborated_no_evidence`: evidence did not arrive before the evidence TTL. It remains a corroborated incident with no uploaded evidence and should be visibly marked as evidence-expired/missing.
-- `confirmed`: a reviewer approved the incident. This is the authoritative positive decision.
-- `rejected`: progression, stale-observation handling, clustering policy, or a reviewer rejected the incident. A rejected observation can override an already-`corroborated` incident when that incident is re-evaluated.
-
-### `incident_observations`
-
-- `incident_id`: foreign key to `candidate_incidents.id`; linked incident.
-- `observation_id`: foreign key to `observations.id`; linked observation.
-- The pair is the composite primary key. This is the many-to-many link used to render an incident's observations.
-
-### `evidence`
-
-- `incident_id`: foreign key to `candidate_incidents.id`; parent incident.
-- `device_id`: foreign key to `devices.device_id`; device asked to provide the clip.
-- `event_nonce`: event whose clip was requested; together with `incident_id` and `device_id`, forms the composite primary key.
-- `requested_at`: nullable timestamp; when evidence collection was requested.
-- `uploaded_at`: nullable timestamp; when the device upload completed. Null means not uploaded.
-- `storage_ref`: nullable text; MinIO object reference. Null means no stored file.
-- `retention_expires_at`: nullable timestamp; requested retention deadline used by the evidence workflow.
-
-### `reviewers`
-
-- `id`: integer/bigint primary key; reviewer identity.
-- `email`: unique string; login identifier.
-- `password_hash`: bcrypt password hash; raw passwords are not stored.
-- `role`: `reviewer` or `admin`; returned by login but not used for route authorization beyond requiring a reviewer account.
-- `created_at`: timezone-aware timestamp; account creation time.
-
-## 4. The incident lifecycle
-
-1. **Device sends a burst.** `POST /v1/observations` validates the payload with Pydantic, immediately normalizes and HMAC-hashes `plate_no`, then checks `event_nonce`. A duplicate nonce returns HTTP `409`. The device is auto-registered as active if it does not exist. A non-empty signature is currently accepted by the signature-verification stub.
-
-2. **Progression filtering.** For `wrong_side`, the service compares the new point with prior observations for the same hashed plate. It produces `confirmed`, `rejected`, or `unconfirmed`. Rejection reasons are `parked`, `unrealistic_speed`, `inconsistent_trajectory`, or `overtaking_artifact`. The first point is normally `unconfirmed`; a solitary point becomes `rejected` as `overtaking_artifact` when the stale sweep ages it past the corroboration window. For `red_light`, this progression step is skipped and `wrong_way_status` is null.
-
-3. **Clustering.** Related observations are grouped by violation type and hashed plate, within the configured spatial and time limits. Defaults are a 100-meter cluster radius, geohash precision 7, and a 300-second corroboration window. The cluster stores its time window and centroid and is linked to a `candidate_incidents` row.
-
-4. **Corroboration.** For `wrong_side`, only observations with `wrong_way_status == confirmed` count. For `red_light`, all observations count. Both types require at least 2 eligible observations from at least 2 distinct devices. An unconfirmed wrong-side report therefore leaves the incident `candidate`. If any wrong-side observation in the cluster is rejected, the whole incident becomes `rejected`; this can override an already-`corroborated` incident when a later burst causes re-evaluation. The evidence trigger does not request evidence after rejection.
-
-5. **Evidence request.** Once corroborated, an evidence row is created for each contributing observation/device, with `requested_at` and a retention deadline. Devices poll for their pending requests and upload clips separately. The dashboard reads evidence through incident detail; it does not request evidence itself.
-
-6. **Background sweeps.** The stale-observation sweep runs every 60 seconds by default. It rejects candidate incidents with exactly one old observation as `overtaking_artifact`. The evidence-TTL sweep runs every 3600 seconds by default. It changes `corroborated` to `corroborated_no_evidence` when requested evidence has not arrived before the configured 30-day TTL. Both sweeps can also be triggered through internal endpoints for local testing.
-
-7. **Human review.** A reviewer loads the incident, linked observations, and evidence, then calls approve or reject. Approval writes `reviewed_by` and `reviewed_at` and sets status to `confirmed`. Rejection writes the same audit fields and sets status to `rejected`. This is the only authoritative decision step.
-
-## 5. API reference for dashboard use
-
-All paths below are relative to the API origin, normally `http://localhost:8000`. Reviewer endpoints require `Authorization: Bearer <JWT>` from `/v1/auth/login`.
-
-### `POST /v1/auth/login`
-
-- **Auth**: none.
-- **Request**: JSON `{ "email": string, "password": string }`.
-- **Response**: `{ "access_token": string, "token_type": "bearer", "reviewer": { "id": number, "email": string, "role": string } }`.
-- **Purpose**: authenticate a reviewer and obtain the JWT for dashboard calls. Invalid credentials return HTTP `401`.
-
-### `GET /v1/incidents`
-
-- **Auth**: reviewer JWT required.
-- **Query**: optional `status` (exact incident status), optional `violation_type` (`wrong_side` or `red_light`), `limit` (default 50, maximum 200), and `offset` (default 0).
-- **Response**: JSON array of `{ "id": number, "violation_type": string, "hashed_plate": string, "status": string, "window_start": timestamp, "window_end": timestamp, "observation_count": number, "reviewed_by": number|null, "reviewed_at": timestamp|null }`, ordered newest `window_end` first.
-- **Purpose**: populate the dashboard incident queue and filter it by status/type.
-
-### `GET /v1/incidents/{id}`
-
-- **Auth**: reviewer JWT required.
-- **Request**: no body; `{id}` is the numeric incident ID.
-- **Response**: `{ "id": number, "violation_type": string, "hashed_plate": string, "status": string, "window_start": timestamp, "window_end": timestamp, "reviewed_by": number|null, "reviewed_at": timestamp|null, "reviewer_email": string|null, "observations": [ { "id": number, "device_id": string, "violation_type": string, "hashed_plate": string, "lat": number, "lon": number, "ts": timestamp, "event_nonce": string, "wrong_way_status": string|null } ], "evidence_items": [ { "device_id": string, "event_nonce": string, "uploaded_at": timestamp|null, "storage_ref": string|null, "view_url": string|null, "retention_expires_at": timestamp|null } ] }`.
-- **Purpose**: render the incident detail, progression outcomes, and evidence links. Missing incidents return HTTP `404`.
-
-### `POST /v1/incidents/{id}/approve`
-
-- **Auth**: reviewer JWT required.
-- **Request**: no body.
-- **Response**: `{ "status": "success", "incident_id": number, "new_status": "confirmed", "reviewed_by": number, "reviewed_at": timestamp }`.
-- **Purpose**: record the authenticated reviewer's authoritative approval.
-
-### `POST /v1/incidents/{id}/reject`
-
-- **Auth**: reviewer JWT required.
-- **Request**: no body.
-- **Response**: `{ "status": "success", "incident_id": number, "new_status": "rejected", "reviewed_by": number, "reviewed_at": timestamp }`.
-- **Purpose**: record the authenticated reviewer's authoritative rejection.
-
-### Device-facing endpoints (dashboard does not call these directly)
-
-- `POST /v1/observations`: no auth currently. Request fields are `device_id`, `violation_type`, `plate_no`, `lat`, `lon`, `timestamp`, `event_nonce`, and `sig`; response is `{status, event_nonce, hashed_plate, message}`. It returns HTTP `201` when accepted.
-- `GET /v1/evidence-requests?device_id=...`: no auth currently. Returns an array of `{incident_id, device_id, event_nonce, violation_type, requested_at, retention_expires_at}` for that device's unuploaded requests.
-- `POST /v1/evidence/{event_nonce}`: no auth currently; multipart field `file`. Returns `{status, event_nonce, storage_ref, uploaded_at}` after storing the file.
-
-`GET /health` is also available without auth and returns `{ "status": "ok", "version": "0.1.0" }`.
-
-## 6. What's already there to build against
-
-### Local development stack
-
-From the repository root:
-
-```text
-docker compose up
+```
++------------------+         +----------------------------+         +----------------------+
+|     devices      |         |   incident_observations    |         | candidate_incidents  |
++------------------+         +----------------------------+         +----------------------+
+| device_id (PK)   |<---+    | incident_id (PK, FK)       |<------->| id (PK)              |
+| public_key       |    +---| observation_id (PK, FK)    |    +--->| violation_type       |
+| trust_score      |    |    +----------------------------+    |    | plate_no (HASH)      |
+| registered_at    |    |                                  |    | geo_cluster          |
+| status           |    |    +----------------------------+    |    | window_start         |
++------------------+    |    |        observations        |    |    | window_end           |
+          ^             |    +----------------------------+    |    | status               |
+          |             +--->| id (PK)                    |----+    | reviewed_by (FK) ----+
+          |                  | device_id (FK)             |         | reviewed_at          |
+          |                  | violation_type             |         +----------------------+
+          |                  | plate_no (HASH)            |                    |
+          |                  | lat, lon, location (Geog)  |                    |
+          |                  | ts, event_nonce, signature |                    |
+          |                  | wrong_way_status           |                    |
+          |                  +----------------------------+                    |
+          |                                                                    |
++------------------+         +----------------------------+                    |
+|    reviewers     |<--------|          evidence          |                    |
++------------------+         +----------------------------+                    |
+| id (PK)          |         | incident_id (PK, FK)       |<-------------------+
+| email            |         | device_id (PK, FK)         |
+| password_hash    |         | event_nonce (PK)           |
+| role             |         | requested_at               |
+| created_at       |         | uploaded_at                |
++------------------+         | storage_ref                |
+                             | retention_expires_at       |
+                             +----------------------------+
 ```
 
-The API container runs migrations, seeds the default reviewer, and listens on `http://localhost:8000`. The default local services are:
+#### 1. `devices`
+Tracks reporting edge hardware.
+- `device_id` (`String(128)`, PK): Hardware identifier of the edge camera.
+- `public_key` (`Text`): Public key used for cryptographic signature verification.
+- `trust_score` (`Float`, default `0.5`): Reliability score weighting edge device reports.
+- `registered_at` (`DateTime(timezone=True)`): Device provisioning timestamp.
+- `status` (`String(32)`, default `'active'`): Operational state (`active`, `suspended`, `revoked`).
 
-- API: host port `8000` -> container port `8000`
-- Postgres/PostGIS: host port `5433` -> container port `5432`; database `roadsense`, user `roadsense`, password `roadsense`
-- Redis: host port `6379`
-- MinIO API: host port `9000`
-- MinIO console: host port `9001`
+#### 2. `reviewers`
+Authorized operators of the Step 7 dashboard.
+- `id` (`BigInteger`, PK): Reviewer ID.
+- `email` (`String(320)`, Unique): Reviewer login email.
+- `password_hash` (`Text`): Bcrypt salted password hash.
+- `role` (`String(32)`, default `'reviewer'`): Access tier (`reviewer`, `admin`).
+- `created_at` (`DateTime(timezone=True)`): Account creation timestamp.
 
-The default MinIO console credentials are `minioadmin` / `minioadmin` from `docker-compose.yml`. The API's default local reviewer is:
+#### 3. `observations`
+Raw burst detections ingested from edge devices.
+- `id` (`BigInteger`, PK): Unique observation ID.
+- `device_id` (`String(128)`, FK -> `devices.device_id`): Reporting device.
+- `violation_type` (`String(32)`): `'wrong_side'` or `'red_light'`.
+- `plate_no` (`Text`): **HMAC-SHA256 hash of the normalized license plate**. *Why:* Raw license plates represent PII and are irreversibly hashed at the ingestion boundary with `PLATE_HASH_KEY`. Plaintext plate numbers are never written to the database or logged.
+- `lat`, `lon` (`Float`): Coordinates in decimal degrees.
+- `location` (`Geography(Point, 4326)`): PostGIS geography point enabling spatial indexing and radius queries.
+- `ts` (`DateTime(timezone=True)`): Edge capture timestamp.
+- `event_nonce` (`String(128)`, Unique): UUID generated by the edge camera to ensure idempotent ingestion.
+- `signature` (`Text`): Cryptographic payload signature from the device.
+- `wrong_way_status` (`String(32)`, Nullable): Progression evaluation verdict (`'unconfirmed'`, `'confirmed'`, `'rejected'`). Always `NULL` for red-light violations.
 
-- Email: `admin@roadsense.local`
-- Password: `roadsense-admin-password`
-- Role: `admin`
+#### 4. `candidate_incidents`
+Clustered potential violations undergoing corroboration or review.
+- `id` (`BigInteger`, PK): Incident ID referenced throughout dashboard.
+- `violation_type` (`String(32)`): `'wrong_side'` or `'red_light'`.
+- `plate_no` (`Text`): Hashed vehicle plate identifier matching clustered observations.
+- `geo_cluster` (`Geography(Point, 4326)`): Centroid geography of clustered points.
+- `window_start`, `window_end` (`DateTime(timezone=True)`): Time bounds spanning all linked observations.
+- `status` (`String(32)`): Current lifecycle status (see status table below).
+- `reviewed_by` (`BigInteger`, FK -> `reviewers.id`, Nullable): *Why:* Unambiguous audit trail recording exactly which authenticated reviewer made the final determination.
+- `reviewed_at` (`DateTime(timezone=True)`, Nullable): *Why:* Timestamp when the reviewer approved or rejected the incident.
 
-### Synthetic burst generator
+#### 5. `incident_observations`
+Many-to-many join table linking `candidate_incidents.id` to `observations.id` with cascading deletion.
 
-Run it with the stack up:
+#### 6. `evidence`
+Tracks media clip requests and uploads from edge devices.
+- `incident_id` (`BigInteger`, FK -> `candidate_incidents.id`, Composite PK): Parent incident.
+- `device_id` (`String(128)`, FK -> `devices.device_id`, Composite PK): Target device requested for clip.
+- `event_nonce` (`String(128)`, Composite PK): Specific event nonce to retrieve.
+- `requested_at` (`DateTime(timezone=True)`): *Why:* Records when the evidence request was queued, establishing the base time for TTL expiration calculation.
+- `uploaded_at` (`DateTime(timezone=True)`, Nullable): Timestamp when the device completed media upload.
+- `storage_ref` (`Text`, Nullable): Object path in MinIO (`minio://evidence/evidence/<nonce>.mp4`).
+- `retention_expires_at` (`DateTime(timezone=True)`, Nullable): Evidence retention expiration date.
 
-```text
+---
+
+### Incident Status Values
+
+| Status | Meaning & Lifecycle Stage | Dashboard Rendering Behavior |
+| :--- | :--- | :--- |
+| `candidate` | Initial state. Observations are grouped but have not met multi-device corroboration thresholds or progression criteria. | Display as "Pending Corroboration" / "Candidate". Review action buttons disabled (waiting for corroboration or sweep). |
+| `corroborated` | Corroboration criteria satisfied (>= 2 devices, >= 2 valid observations). Evidence requests dispatched. Media uploaded or in-flight. | **Primary review queue item**. Display "Ready for Review", render video player / presigned media links, enable **Approve** and **Reject** buttons. |
+| `corroborated_no_evidence` | Incident was corroborated, but device evidence upload TTL expired without receiving clips. | Display as "Corroborated (Missing Evidence)". Flag telemetry and lack of video. Still allows reviewer decision or dismissal. |
+| `confirmed` | Human reviewer approved the violation (`POST /v1/incidents/{id}/approve`). Terminal state. | Display badge "Confirmed / Approved". Show reviewer email and reviewed timestamp. Disable review action buttons. |
+| `rejected` | Violation dismissed by reviewer OR auto-rejected by progression/sweep algorithms. Terminal state. | Display badge "Rejected". Show rejection metadata / audit timestamp. Disable review action buttons. |
+
+---
+
+## 4. The Incident Lifecycle
+
+```
+[ Edge Device Burst ]
+        |
+        v
+1. Ingestion & Privacy Boundary
+   - Immediate HMAC-SHA256 plate hashing (raw plate discarded)
+   - Idempotency check on event_nonce (409 on duplicate)
+        |
+        +----------------------------+
+        | (wrong_side)               | (red_light)
+        v                            v
+2a. Trajectory Filter          2b. Skip Filter
+   - Parked check (<8m / >3s)       (Straight to clustering)
+   - Speed upper bound (>60m/s)
+   - Bearing deviation (<60 deg)
+   - Stale span check
+        |
+        v
+3. Spatio-Temporal Clustering (100m radius, 300s window)
+        |
+        +---> Any observation rejected? --------> [ Status: REJECTED ] (Overrides corroboration)
+        |
+        +---> >=2 devices & >=2 confirmed obs?
+                 |
+                 +--- NO  ----------------------> [ Status: CANDIDATE ]
+                 |                                      | (Ages past 300s solitary)
+                 |                                      v
+                 |                                [ Sweep: REJECTED (overtaking_artifact) ]
+                 |
+                 +--- YES ----------------------> [ Status: CORROBORATED ]
+                                                        |
+                                            +-----------+-----------+
+                                            |                       |
+                                    Evidence Uploaded       Evidence TTL Expired (30d)
+                                            |                       |
+                                            v                       v
+                                   [ Ready for Review ]  [ Status: CORROBORATED_NO_EVIDENCE ]
+                                            |                       |
+                                            +-----------+-----------+
+                                                        |
+                                                        v
+                                         4. Human Reviewer Action
+                                            - POST /approve -> [ Status: CONFIRMED ]
+                                            - POST /reject  -> [ Status: REJECTED ]
+```
+
+### Step-by-Step Flow:
+1. **Ingestion & Normalization**: An edge camera posts a burst payload. The plate string is uppercase-normalized, whitespace-stripped, and HMAC-SHA256 hashed immediately.
+2. **Progression Analysis (`wrong_side` only)**:
+   - Evaluated against prior unconfirmed points for that hashed plate.
+   - **Parked Check**: > 3 seconds elapsed with total movement <= 8.0 meters -> `REJECTED (parked)`.
+   - **Speed Check**: Speed > 60.0 m/s (216 km/h) -> `REJECTED (unrealistic_speed)`.
+   - **Bearing Consistency**: Intermediate trajectory bearing reversing or deviating > 60° from overall vector -> `REJECTED (inconsistent_trajectory)`.
+   - **Valid Progression**: Distance >= 12.0m, speed >= 1.0 m/s, within 300s window -> `CONFIRMED`.
+3. **Clustering & Evidence Triggering**:
+   - Observations with identical violation type and hashed plate within 100 meters and 300 seconds are clustered.
+   - **Rejection Propagation Rule**: *Crucial fix.* Only `confirmed` wrong-side observations (or any red-light observation) count toward corroboration thresholds. If **any** observation in an incident is `rejected`, the entire incident transitions to `rejected` immediately. A rejected trajectory cannot be salvaged or overridden by additional devices.
+   - If >= 2 distinct devices and >= 2 valid observations match, status becomes `corroborated` and `evidence` request rows are inserted.
+4. **Media Fetch & Reviewer Decision**:
+   - Devices poll `/v1/evidence-requests` and upload clips to `/v1/evidence/{event_nonce}` stored in MinIO.
+   - The Reviewer views the incident, plays the presigned video clip, and submits an Approval (`confirmed`) or Rejection (`rejected`).
+
+---
+
+### Critical Backend Guarantees (The Hardest-Won Fixes)
+
+#### 1. Rejection Propagation is Absolute
+- If a vehicle trajectory is flagged as `parked`, `unrealistic_speed`, `inconsistent_trajectory`, or `overtaking_artifact`, the entire incident becomes `rejected`.
+- Even if an incident previously reached `corroborated`, a subsequent rejected observation for that cluster forces the incident to `rejected`.
+- The dashboard can trust that `corroborated` incidents contain zero rejected trajectory segments.
+
+#### 2. Isolated, Per-Incident Background Sweeps
+Two scheduled background jobs run periodically in the FastAPI process:
+- **`sweep_stale_observations`**: Runs every 60s. Finds single-observation `wrong_side` candidate incidents older than 300s and marks them `rejected` with reason `overtaking_artifact` (momentary lane cross rather than sustained wrong-way travel). **Strictly scoped to `wrong_side`** so `red_light` violations are never purged by progression aging.
+- **`sweep_evidence_ttl`**: Runs hourly. Finds `corroborated` incidents where evidence request TTL (30 days default) has expired without receiving clips, transitioning them to `corroborated_no_evidence`.
+- **Per-Incident Transaction Isolation**: Each candidate row is processed in its own independent database session and commit block. If one record has corrupt data or fails, it logs an error and skips cleanly—it **never rolls back or locks updates** for unrelated incidents.
+
+---
+
+## 5. API Reference for Dashboard Use
+
+Base URL in development: `http://localhost:8000`
+
+### Authentication Endpoints
+
+#### `POST /v1/auth/login`
+- **Auth**: None
+- **Purpose**: Authenticate reviewer credentials and retrieve a JWT bearer token.
+- **Request Body**:
+  ```json
+  {
+    "email": "admin@roadsense.local",
+    "password": "roadsense-admin-password"
+  }
+  ```
+- **Response `200 OK`**:
+  ```json
+  {
+    "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "token_type": "bearer",
+    "reviewer": {
+      "id": 1,
+      "email": "admin@roadsense.local",
+      "role": "admin"
+    }
+  }
+  ```
+- **Error `401 UNAUTHORIZED`**: `{"detail": "Invalid email or password"}`
+
+---
+
+#### `GET /v1/auth/me`
+- **Auth**: `Bearer <token>`
+- **Purpose**: Retrieve identity and permissions of the currently authenticated reviewer.
+- **Response `200 OK`**:
+  ```json
+  {
+    "id": 1,
+    "email": "admin@roadsense.local",
+    "role": "admin",
+    "created_at": "2026-09-13T10:00:00Z"
+  }
+  ```
+
+---
+
+### Incident Review Endpoints
+
+#### `GET /v1/incidents`
+- **Auth**: `Bearer <token>`
+- **Purpose**: Fetch paginated list of candidate, corroborated, and reviewed incidents for table/queue views.
+- **Query Parameters**:
+  - `status` (optional, string): Filter by status (`candidate`, `corroborated`, `corroborated_no_evidence`, `confirmed`, `rejected`).
+  - `violation_type` (optional, string): Filter by type (`wrong_side`, `red_light`).
+  - `limit` (optional, int, default `50`, min `1`, max `200`): Results per page.
+  - `offset` (optional, int, default `0`, min `0`): Pagination offset.
+- **Response `200 OK`**:
+  ```json
+  [
+    {
+      "id": 12,
+      "violation_type": "wrong_side",
+      "hashed_plate": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": "corroborated",
+      "window_start": "2026-09-13T18:00:00Z",
+      "window_end": "2026-09-13T18:00:10Z",
+      "observation_count": 2,
+      "reviewed_by": null,
+      "reviewed_at": null
+    }
+  ]
+  ```
+
+---
+
+#### `GET /v1/incidents/{incident_id}`
+- **Auth**: `Bearer <token>`
+- **Purpose**: Fetch complete details for a single incident, including all underlying observation coordinates, telemetry, and presigned MinIO video URLs.
+- **Response `200 OK`**:
+  ```json
+  {
+    "id": 12,
+    "violation_type": "wrong_side",
+    "hashed_plate": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "status": "corroborated",
+    "window_start": "2026-09-13T18:00:00Z",
+    "window_end": "2026-09-13T18:00:10Z",
+    "reviewed_by": null,
+    "reviewed_at": null,
+    "reviewer_email": null,
+    "observations": [
+      {
+        "id": 101,
+        "device_id": "CAM-MUM-001",
+        "violation_type": "wrong_side",
+        "hashed_plate": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "lat": 19.1197,
+        "lon": 72.8468,
+        "ts": "2026-09-13T18:00:00Z",
+        "event_nonce": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+        "wrong_way_status": "confirmed"
+      },
+      {
+        "id": 102,
+        "device_id": "CAM-MUM-002",
+        "violation_type": "wrong_side",
+        "hashed_plate": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "lat": 19.1202,
+        "lon": 72.8475,
+        "ts": "2026-09-13T18:00:10Z",
+        "event_nonce": "6a2f4c81-8e1a-4d43-85dc-9d41b6c7a401",
+        "wrong_way_status": "confirmed"
+      }
+    ],
+    "evidence_items": [
+      {
+        "device_id": "CAM-MUM-001",
+        "event_nonce": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+        "uploaded_at": "2026-09-13T18:01:00Z",
+        "storage_ref": "minio://evidence/evidence/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d.mp4",
+        "view_url": "http://minio:9000/evidence/evidence/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d.mp4?X-Amz-Signature=...",
+        "retention_expires_at": "2026-10-13T18:00:00Z"
+      }
+    ]
+  }
+  ```
+
+---
+
+#### `POST /v1/incidents/{incident_id}/approve`
+- **Auth**: `Bearer <token>`
+- **Purpose**: Reviewer approves violation. Sets `status = "confirmed"`, populates `reviewed_by` with reviewer ID from JWT, and records `reviewed_at`.
+- **Response `200 OK`**:
+  ```json
+  {
+    "status": "success",
+    "incident_id": 12,
+    "new_status": "confirmed",
+    "reviewed_by": 1,
+    "reviewed_at": "2026-09-13T18:15:30.123456Z"
+  }
+  ```
+
+---
+
+#### `POST /v1/incidents/{incident_id}/reject`
+- **Auth**: `Bearer <token>`
+- **Purpose**: Reviewer rejects violation. Sets `status = "rejected"`, populates `reviewed_by` and `reviewed_at`.
+- **Response `200 OK`**:
+  ```json
+  {
+    "status": "success",
+    "incident_id": 12,
+    "new_status": "rejected",
+    "reviewed_by": 1,
+    "reviewed_at": "2026-09-13T18:16:05.654321Z"
+  }
+  ```
+
+---
+
+### Other Endpoints (Device & Internal Ops)
+
+These are not called directly by the dashboard frontend, but are useful context:
+- `POST /v1/observations`: Edge camera ingest for observation bursts.
+- `GET /v1/evidence-requests?device_id=...`: Edge camera poll for pending clip upload requests.
+- `POST /v1/evidence/{event_nonce}`: Edge camera multipart file upload for MP4/image clips.
+- `POST /v1/internal/sweep/stale-observations`: On-demand trigger for stale burst sweep.
+- `POST /v1/internal/sweep/evidence-ttl`: On-demand trigger for evidence-TTL expiration sweep.
+- `GET /health`: Basic health check (`{"status": "ok", "version": "0.1.0"}`).
+
+---
+
+## 6. What's Already There to Build Against
+
+### Local Development Stack
+
+Start the entire backend environment via Docker Compose:
+```bash
+docker compose up -d
+```
+
+| Service | Internal Port | Exposed Port | Purpose / Credentials |
+| :--- | :--- | :--- | :--- |
+| **FastAPI Backend** | `8000` | `http://localhost:8000` | Core API & Swagger Docs (`/docs`) |
+| **PostgreSQL + PostGIS** | `5432` | `localhost:5433` | DB: `roadsense`, User/Pass: `roadsense`/`roadsense` |
+| **Redis** | `6379` | `localhost:6379` | Cache / pub-sub |
+| **MinIO API** | `9000` | `http://localhost:9000` | S3 API, User/Pass: `minioadmin`/`minioadmin` |
+| **MinIO Console** | `9001` | `http://localhost:9001` | Storage Web UI |
+
+### Pre-Seeded Reviewer Credentials
+The database automatically seeds an initial administrator/reviewer account on container startup:
+- **Email**: `admin@roadsense.local`
+- **Password**: `roadsense-admin-password`
+
+---
+
+### Test Data Generator: `scripts/generate_synthetic_bursts.py`
+
+Run the generator from within the `backend` environment or local Python venv:
+```bash
 python backend/scripts/generate_synthetic_bursts.py
 ```
 
-It sends nine independent scenarios and uses the reviewer login to assert incident results. Each scenario produces the following test data:
+This script seeds **9 realistic end-to-end scenarios**, populating all possible lifecycle statuses and edge cases to test your dashboard UI:
 
-1. **Corroborated real incident (`wrong_side`)**: two cameras, two moving observations; status `corroborated` and evidence requests created.
-2. **Parked-car false positive (`wrong_side`)**: three near-stationary bursts; progression rejects them as `parked`; status `rejected`.
-3. **Overtaking-artifact false positive (`wrong_side`)**: one burst, then stale-observation sweep with a zero-second override; status changes from `candidate` to `rejected` with `overtaking_artifact` behavior.
-4. **Inconsistent trajectory (`wrong_side`)**: three reports with a reversal; status `rejected` with `inconsistent_trajectory` behavior.
-5. **Red-light violation (`red_light`)**: two cameras at one intersection; progression is skipped; status `corroborated` and evidence requests created.
-6. **Stale-span unconfirmed (`wrong_side`)**: two plausible bursts 360 seconds apart, beyond the 300-second progression window; observations remain `unconfirmed`; status `candidate`.
-7. **Degraded-GPS burst (`wrong_side`)**: two cameras with reproducible GPS jitter within the 100-meter radius; one incident, status `corroborated`.
-8. **Never-corroborated flag (`wrong_side`)**: one burst with no sweep; status `candidate`.
-9. **Evidence-TTL exhaustion (`wrong_side`)**: two corroborating bursts, no evidence upload, then TTL sweep with a zero-day override; status `corroborated_no_evidence`.
+1. **Scenario 1: Corroborated Real Incident (`wrong_side`)**
+   - 2 independent cameras, 10s / 60m apart.
+   - **Result Status**: `corroborated` (with valid trajectory).
+2. **Scenario 2: Parked Car False Positive (`wrong_side`)**
+   - 3 bursts with sub-meter jitter (<8m over time).
+   - **Result Status**: `rejected` (auto-rejected with `reason: parked`).
+3. **Scenario 3: Overtaking Artifact False Positive (`wrong_side`)**
+   - Single isolated burst aged out via internal sweep.
+   - **Result Status**: `rejected` (auto-rejected with `reason: overtaking_artifact`).
+4. **Scenario 4: Inconsistent Trajectory (`wrong_side`)**
+   - Observations showing direction reversal (>60° bearing deviation).
+   - **Result Status**: `rejected` (auto-rejected with `reason: inconsistent_trajectory`).
+5. **Scenario 5: Red-Light Violation (`red_light`)**
+   - 2 cameras at the same intersection reporting red light.
+   - **Result Status**: `corroborated` (skips trajectory filter, requires device agreement).
+6. **Scenario 6: Slow Corroboration / Stale Span (`wrong_side`)**
+   - 2 bursts separated by 360 seconds (physically plausible but beyond standard 300s window).
+   - **Result Status**: `candidate` (stays unconfirmed in queue).
+7. **Scenario 7: Degraded GPS Jitter (`wrong_side`)**
+   - Multiple bursts with 30–40m GPS noise within cluster radius.
+   - **Result Status**: single `corroborated` cluster (proves spatial resilience).
+8. **Scenario 8: Solitary Observation Baseline (`wrong_side`)**
+   - Single report, no second device, sweep not yet run.
+   - **Result Status**: `candidate` ("waiting for corroboration" baseline).
+9. **Scenario 9: Evidence TTL Expiration (`wrong_side`)**
+   - Corroborated incident where evidence requests timed out without upload.
+   - **Result Status**: `corroborated_no_evidence`.
 
-The generator uses unique random plates per scenario, so its output accumulates unless the database volumes are removed. It can run one case with `--scenario N` and can target another API origin with `--base-url URL`.
+---
 
-## 7. Known gaps / things the dashboard needs to account for
+## 7. Known Gaps & Rough Edges
 
-- Device signature verification is explicitly stubbed: any non-empty `sig` is accepted, and auto-registered devices receive `stub_public_key`.
-- Device observation/evidence endpoints and the internal sweep endpoints have no application-level authentication. Internal sweep routes are intended to be network/firewall protected in production.
-- Redis is present in Compose and configuration but is not currently used for caching, queues, or coordination.
-- The dashboard receives only the deterministic `hashed_plate`, not the raw plate. It cannot display or search by the original plate number.
-- Progression rejection reasons are not exposed as a separate observation API field. Incident detail exposes `wrong_way_status: "rejected"`, but the reason (`parked`, `unrealistic_speed`, `inconsistent_trajectory`, or `overtaking_artifact`) is not persisted in its own column or returned in the reviewer response.
-- Review action endpoints accept no reason or note. The audit trail contains reviewer identity and timestamp only.
-- Approve/reject routes do not enforce a status transition policy in the endpoint; they set the requested final status for any existing incident.
-- Evidence detail exposes `storage_ref` as well as a presigned `view_url`. A missing `storage_ref` produces `view_url: null`; the frontend should handle pending evidence without a playable URL.
-- `corroborated_no_evidence` is a terminal timeout state in the sweep logic, but the review endpoints can still set an existing incident to `confirmed` or `rejected`.
-- The configured default secrets (`JWT_SECRET`, `PLATE_HASH_KEY`, and MinIO credentials) are development placeholders and must be replaced outside local development.
-- CORS currently allows all origins with credentials enabled, which is suitable only as a development convenience.
-- APScheduler is embedded in the API process. If the package is absent, the jobs are disabled and only manually triggered sweeps work.
-- The Postgres migration models `location` and `geo_cluster` as PostGIS geography, while the ORM annotations are text-oriented and the SQLite test path stores WKT strings. Frontend responses provide `lat`/`lon` for observations; there is no location geometry in the incident API response.
+1. **Device Signature Verification is Stubbed**: `verify_signature()` in `backend/app/core/security.py` currently returns `True` as long as a non-empty signature string is provided. Asymmetric ECDSA/Ed25519 public key verification against `devices.public_key` is not yet enforced at ingest.
+2. **Environment Secrets**: Default fallback values for `JWT_SECRET` (`"change-me-in-development"`) and `PLATE_HASH_KEY` (`"change-me-to-a-random-secret"`) are active in dev. In production, these must be set to 32+ byte cryptographically secure random values.
+3. **No Self-Service Reviewer Registration Endpoint**: Reviewers cannot sign up via the API; accounts must be provisioned through seed scripts (`python -m app.db.seed`) or directly in the PostgreSQL database.
+4. **MinIO Presigned URL Hostnames in Local Docker**: MinIO generates presigned URLs containing the internal Docker container endpoint (`http://minio:9000/...`). If testing the frontend directly on host browser outside Docker network, ensure `localhost:9000` is mapped or access MinIO through host port mappings. If MinIO is offline, the backend gracefully falls back to returning the raw storage reference string.
+5. **Internal Sweep Endpoints are Unauthenticated**: `/v1/internal/sweep/...` endpoints do not check reviewer JWT headers so synthetic test scripts can trigger sweeps. In production deployment, these must be protected at the network firewall/mesh level.
