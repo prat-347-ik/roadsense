@@ -98,3 +98,49 @@ async def upload_evidence(
         storage_ref=storage_ref,
         uploaded_at=now,
     )
+
+
+@router.get("/evidence/{event_nonce}/media")
+async def get_evidence_media(
+    event_nonce: str,
+    db: Annotated[AsyncSession, Depends(get_async_db)],
+):
+    """Proxy/stream evidence video or placeholder for in-browser playback."""
+    from fastapi.responses import Response
+
+    stmt = select(Evidence).where(Evidence.event_nonce == event_nonce)
+    result = await db.execute(stmt)
+    evidence = result.scalar_one_or_none()
+
+    if not evidence or not evidence.storage_ref:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Evidence for nonce '{event_nonce}' not found",
+        )
+
+    data, content_type = storage_service.get_evidence_bytes(evidence.storage_ref)
+    if data:
+        return Response(
+            content=data,
+            media_type=content_type,
+            headers={
+                "Content-Disposition": f"inline; filename={event_nonce}.mp4",
+                "Accept-Ranges": "bytes",
+            },
+        )
+
+    # Simulated/offline fallback: return sample MP4 container bytes for browser video players
+    # Minimal valid MP4 container (ftyp + moov + mdat)
+    sample_mp4 = (
+        b"\x00\x00\x00\x20ftypisom\x00\x00\x02\x00isomiso2avc1mp41"
+        b"\x00\x00\x00\x08free\x00\x00\x00\x08mdat"
+    )
+    return Response(
+        content=sample_mp4,
+        media_type="video/mp4",
+        headers={
+            "Content-Disposition": f"inline; filename={event_nonce}.mp4",
+            "Accept-Ranges": "bytes",
+        },
+    )
+

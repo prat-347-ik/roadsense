@@ -91,5 +91,26 @@ class StorageService:
             logger.warning(f"Failed to generate presigned URL for {storage_ref}: {e}")
             return storage_ref
 
+    def get_evidence_bytes(self, storage_ref: str) -> tuple[Optional[bytes], str]:
+        """Fetch raw bytes and content type for evidence clip."""
+        if not storage_ref or not self.client or not self._connected:
+            return None, "video/mp4"
+
+        object_name = storage_ref.replace(f"minio://{self.bucket}/", "")
+        try:
+            response = self.client.get_object(self.bucket, object_name)
+            data = response.read()
+            response.close()
+            response.release_conn()
+            content_type = "video/mp4"
+            if object_name.endswith(".jpg") or object_name.endswith(".jpeg"):
+                content_type = "image/jpeg"
+            elif object_name.endswith(".png"):
+                content_type = "image/png"
+            return data, content_type
+        except Exception as e:
+            logger.warning(f"Failed to fetch evidence bytes for {storage_ref}: {e}")
+            return None, "video/mp4"
+
 
 storage_service = StorageService()

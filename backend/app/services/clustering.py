@@ -74,13 +74,17 @@ def cluster_observations(
     if not observations:
         return []
 
+    def _to_utc(dt: datetime) -> datetime:
+        return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
     # Sort observations chronologically
-    sorted_obs = sorted(observations, key=lambda o: o.ts)
+    sorted_obs = sorted(observations, key=lambda o: _to_utc(o.ts))
     clusters: List[ObservationCluster] = []
 
     for obs in sorted_obs:
         assigned = False
         obs_geohash = encode_geohash(obs.lat, obs.lon, precision=precision)
+        obs_utc = _to_utc(obs.ts)
 
         for cluster in clusters:
             # Check violation type and plate match
@@ -88,7 +92,7 @@ def cluster_observations(
                 continue
 
             # Check time window
-            time_diff = (obs.ts - cluster.window_start).total_seconds()
+            time_diff = (obs_utc - _to_utc(cluster.window_start)).total_seconds()
             if abs(time_diff) > window_sec:
                 continue
 
@@ -100,8 +104,8 @@ def cluster_observations(
                 # Add to existing cluster and update centroid & window
                 cluster.observations.append(obs)
                 cluster.device_ids.add(obs.device_id)
-                cluster.window_end = max(cluster.window_end, obs.ts)
-                cluster.window_start = min(cluster.window_start, obs.ts)
+                cluster.window_end = max(_to_utc(cluster.window_end), obs_utc)
+                cluster.window_start = min(_to_utc(cluster.window_start), obs_utc)
 
                 # Recompute centroid
                 n = len(cluster.observations)
@@ -227,7 +231,10 @@ def evaluate_evidence_timeout(
     if uploaded_evidence_count >= expected_evidence_count and expected_evidence_count > 0:
         return IncidentClusteringStatus.CORROBORATED
 
-    if (current_time - evidence_requested_at) > timeout_duration:
+    def _to_utc(dt: datetime) -> datetime:
+        return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+    if (current_time - _to_utc(evidence_requested_at)) > timeout_duration:
         # TTL expired without sufficient uploaded evidence
         return IncidentClusteringStatus.CORROBORATED_NO_EVIDENCE
 

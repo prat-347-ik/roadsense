@@ -10,7 +10,15 @@ def get_engine():
     global _engine
     if _engine is None:
         db_url = settings.DATABASE_URL
-        # Fallback to sqlite async if postgresql+asyncpg is requested but asyncpg is not installed
+        # If postgres host is 'postgres' (docker internal name) and not reachable or requested sqlite, fallback to local sqlite file
+        if "postgres:" in db_url or "localhost:5432" in db_url:
+            import socket
+            try:
+                # Quick test if postgres host resolves
+                socket.gethostbyname("postgres")
+            except Exception:
+                db_url = "sqlite+aiosqlite:///roadsense_dev.db"
+
         try:
             _engine = create_async_engine(
                 db_url,
@@ -19,9 +27,8 @@ def get_engine():
                 pool_pre_ping=True,
             )
         except Exception:
-            # Safe local fallback for testing or standalone runs
             _engine = create_async_engine(
-                "sqlite+aiosqlite:///:memory:",
+                "sqlite+aiosqlite:///roadsense_dev.db",
                 echo=False,
                 future=True,
             )

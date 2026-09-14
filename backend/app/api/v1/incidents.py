@@ -14,6 +14,7 @@ from app.schemas.observation import (
     IncidentSummary,
     ObservationRead,
 )
+from app.services.progression import ObservationPoint, evaluate_wrong_way_progression
 from app.services.storage import storage_service
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
@@ -83,6 +84,46 @@ async def get_incident(
             detail=f"Incident with ID {incident_id} not found",
         )
 
+    # Progression and rejection diagnostic analysis
+    incident_rejection_reason: Optional[str] = None
+    incident_rejection_details: Optional[str] = None
+
+    sorted_obs = sorted(incident.observations, key=lambda x: x.ts)
+    obs_diagnostics: dict[int, tuple[Optional[str], Optional[str]]] = {}
+
+    if incident.violation_type == "wrong_side" and (incident.status == "rejected" or any(o.wrong_way_status == "rejected" for o in sorted_obs)):
+        if len(sorted_obs) == 1:
+            incident_rejection_reason = "overtaking_artifact"
+            incident_rejection_details = "Solitary observation aged past corroboration window with no corroborating vehicle report (momentary overtaking artifact)."
+            obs_diagnostics[sorted_obs[0].id] = (incident_rejection_reason, incident_rejection_details)
+        elif len(sorted_obs) > 1:
+            obs_points = [
+                ObservationPoint(
+                    lat=o.lat,
+                    lon=o.lon,
+                    ts=o.ts if o.ts.tzinfo else o.ts.replace(tzinfo=timezone.utc),
+                    device_id=o.device_id,
+                    event_nonce=o.event_nonce,
+                    hashed_plate=o.plate_no,
+                    wrong_way_status=o.wrong_way_status,
+                )
+                for o in sorted_obs
+            ]
+            eval_res = evaluate_wrong_way_progression(obs_points[-1], obs_points[:-1])
+            if eval_res.reason:
+                incident_rejection_reason = eval_res.reason.value
+                incident_rejection_details = eval_res.details
+            else:
+                incident_rejection_reason = "inconsistent_trajectory"
+                incident_rejection_details = eval_res.details or "Trajectory failed progression criteria."
+
+            for o in sorted_obs:
+                if o.wrong_way_status == "rejected" or incident.status == "rejected":
+                    obs_diagnostics[o.id] = (incident_rejection_reason, incident_rejection_details)
+
+    elif incident.status == "corroborated_no_evidence":
+        incident_rejection_details = "Evidence collection request timed out before edge devices uploaded video/image clips."
+
     obs_list = [
         ObservationRead(
             id=o.id,
@@ -94,6 +135,8 @@ async def get_incident(
             ts=o.ts,
             event_nonce=o.event_nonce,
             wrong_way_status=o.wrong_way_status,
+            rejection_reason=obs_diagnostics.get(o.id, (None, None))[0],
+            rejection_details=obs_diagnostics.get(o.id, (None, None))[1],
         )
         for o in incident.observations
     ]
@@ -103,13 +146,16 @@ async def get_incident(
         presigned_url = (
             storage_service.get_presigned_url(ev.storage_ref) if ev.storage_ref else None
         )
+        # Proxy URL through backend API for reliable in-browser video playback
+        proxy_url = f"/v1/evidence/{ev.event_nonce}/media" if ev.storage_ref else None
         evidence_list.append(
             {
                 "device_id": ev.device_id,
                 "event_nonce": ev.event_nonce,
                 "uploaded_at": ev.uploaded_at,
                 "storage_ref": ev.storage_ref,
-                "view_url": presigned_url,
+                "view_url": proxy_url or presigned_url,
+                "presigned_url": presigned_url,
                 "retention_expires_at": ev.retention_expires_at,
             }
         )
@@ -124,6 +170,8 @@ async def get_incident(
         reviewed_by=incident.reviewed_by,
         reviewed_at=incident.reviewed_at,
         reviewer_email=incident.reviewer.email if incident.reviewer else None,
+        rejection_reason=incident_rejection_reason,
+        rejection_details=incident_rejection_details,
         observations=obs_list,
         evidence_items=evidence_list,
     )

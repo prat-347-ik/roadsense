@@ -114,13 +114,16 @@ def evaluate_wrong_way_progression(
             details="First observation for plate; awaiting corroboration.",
         )
 
+    def _to_utc(dt: datetime) -> datetime:
+        return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
     # Combine and sort all points chronologically
-    all_points = sorted(prior_observations + [new_obs], key=lambda p: p.ts)
+    all_points = sorted(prior_observations + [new_obs], key=lambda p: _to_utc(p.ts))
 
     first_point = all_points[0]
     last_point = all_points[-1]
 
-    total_time = (last_point.ts - first_point.ts).total_seconds()
+    total_time = (_to_utc(last_point.ts) - _to_utc(first_point.ts)).total_seconds()
     total_displacement = haversine_distance_meters(
         first_point.lat, first_point.lon, last_point.lat, last_point.lon
     )

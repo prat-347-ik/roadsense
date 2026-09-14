@@ -88,7 +88,7 @@ async def create_observation(
             ObservationPoint(
                 lat=p.lat,
                 lon=p.lon,
-                ts=p.ts,
+                ts=p.ts if p.ts.tzinfo is not None else p.ts.replace(tzinfo=timezone.utc),
                 device_id=p.device_id,
                 event_nonce=p.event_nonce,
                 hashed_plate=p.plate_no,
@@ -100,7 +100,7 @@ async def create_observation(
         new_point = ObservationPoint(
             lat=payload.lat,
             lon=payload.lon,
-            ts=payload.timestamp,
+            ts=payload.timestamp if payload.timestamp.tzinfo is not None else payload.timestamp.replace(tzinfo=timezone.utc),
             device_id=payload.device_id,
             event_nonce=payload.event_nonce,
             hashed_plate=hashed_plate,
@@ -128,7 +128,7 @@ async def create_observation(
         location=location_val,
         lat=payload.lat,
         lon=payload.lon,
-        ts=payload.timestamp,
+        ts=payload.timestamp if payload.timestamp.tzinfo is not None else payload.timestamp.replace(tzinfo=timezone.utc),
         event_nonce=payload.event_nonce,
         signature=payload.sig,
         wrong_way_status=wrong_way_status,
@@ -148,7 +148,7 @@ async def create_observation(
         ObservationPoint(
             lat=o.lat,
             lon=o.lon,
-            ts=o.ts,
+            ts=o.ts if o.ts.tzinfo is not None else o.ts.replace(tzinfo=timezone.utc),
             device_id=o.device_id,
             event_nonce=o.event_nonce,
             hashed_plate=o.plate_no,
@@ -182,20 +182,23 @@ async def create_observation(
             else geo_cluster_wkt
         )
 
+        def _to_utc(dt: datetime) -> datetime:
+            return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
         if not incident:
             incident = CandidateIncident(
                 violation_type=payload.violation_type,
                 plate_no=hashed_plate,
                 geo_cluster=geo_cluster_val,
-                window_start=cluster.window_start,
-                window_end=cluster.window_end,
+                window_start=_to_utc(cluster.window_start),
+                window_end=_to_utc(cluster.window_end),
                 status=trigger_decision.incident_status.value,
             )
             db.add(incident)
             await db.flush()
         else:
-            incident.window_start = min(incident.window_start, cluster.window_start)
-            incident.window_end = max(incident.window_end, cluster.window_end)
+            incident.window_start = min(_to_utc(incident.window_start), _to_utc(cluster.window_start))
+            incident.window_end = max(_to_utc(incident.window_end), _to_utc(cluster.window_end))
             if trigger_decision.incident_status == IncidentClusteringStatus.REJECTED:
                 incident.status = "rejected"
             elif incident.status == "candidate" and trigger_decision.should_request_evidence:

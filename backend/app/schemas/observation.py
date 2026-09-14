@@ -84,6 +84,8 @@ class ObservationRead(BaseModel):
     ts: datetime
     event_nonce: str
     wrong_way_status: str | None = None
+    rejection_reason: str | None = None
+    rejection_details: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -128,6 +130,8 @@ class IncidentDetail(BaseModel):
     reviewed_by: int | None = None
     reviewed_at: datetime | None = None
     reviewer_email: str | None = None
+    rejection_reason: str | None = None
+    rejection_details: str | None = None
     observations: list[ObservationRead] = []
     evidence_items: list[dict[str, Any]] = []
 
