@@ -418,3 +418,121 @@ async def test_stale_sweep_ignores_solitary_red_light_observations(monkeypatch):
     assert wrong_side.status == "rejected"
     assert red_light.status == "candidate"
     assert red_light_observation.wrong_way_status is None
+
+
+# -------------------------------------------------------------
+# 6. Evidence Proxy Integrity & Check Constraint Tests
+# -------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_evidence_media_retrieval_failure_returns_502(monkeypatch):
+    """When storage_ref exists but MinIO retrieval fails, return 502 Bad Gateway instead of fake bytes."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "USE_SIMULATED_EVIDENCE", False)
+
+    # Insert incident & evidence record with storage_ref
+    async with TestAsyncSession() as db:
+        dev = Device(device_id="cam-ev-1", public_key="key")
+        inc = CandidateIncident(
+            violation_type="wrong_side",
+            plate_no="hash123",
+            window_start=datetime.now(timezone.utc),
+            window_end=datetime.now(timezone.utc),
+            status="corroborated",
+        )
+        db.add_all([dev, inc])
+        await db.flush()
+
+        ev = Evidence(
+            incident_id=inc.id,
+            device_id=dev.device_id,
+            event_nonce="nonce-fail-test",
+            storage_ref="minio://evidence/evidence/nonce-fail-test.mp4",
+            uploaded_at=datetime.now(timezone.utc),
+        )
+        db.add(ev)
+        await db.commit()
+
+    # Request media proxy — storage is unreachable / mock returns None
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.get("/v1/evidence/nonce-fail-test/media")
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Evidence retrieval temporarily unavailable"
+
+
+@pytest.mark.asyncio
+async def test_evidence_media_simulated_when_flag_enabled(monkeypatch):
+    """When USE_SIMULATED_EVIDENCE=True, simulated bytes can be returned for offline local dev."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "USE_SIMULATED_EVIDENCE", True)
+
+    async with TestAsyncSession() as db:
+        dev = Device(device_id="cam-ev-2", public_key="key")
+        inc = CandidateIncident(
+            violation_type="wrong_side",
+            plate_no="hash123",
+            window_start=datetime.now(timezone.utc),
+            window_end=datetime.now(timezone.utc),
+            status="corroborated",
+        )
+        db.add_all([dev, inc])
+        await db.flush()
+
+        ev = Evidence(
+            incident_id=inc.id,
+            device_id=dev.device_id,
+            event_nonce="nonce-sim-test",
+            storage_ref="minio://evidence/evidence/nonce-sim-test.mp4",
+            uploaded_at=datetime.now(timezone.utc),
+        )
+        db.add(ev)
+        await db.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.get("/v1/evidence/nonce-sim-test/media")
+
+    assert response.status_code == 200
+    assert response.headers.get("x-evidence-simulated") == "true"
+    assert response.headers.get("content-type") == "video/mp4"
+
+
+@pytest.mark.asyncio
+async def test_evidence_media_nonexistent_returns_404():
+    """Nonexistent nonce or missing storage_ref returns 404."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.get("/v1/evidence/nonexistent-nonce/media")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_schema_check_constraints_enforced():
+    """Verify ORM models enforce CheckConstraints on table creation."""
+    from sqlalchemy.exc import IntegrityError
+
+    async with TestAsyncSession() as db:
+        dev = Device(device_id="cam-cc-test", public_key="key")
+        db.add(dev)
+        await db.commit()
+
+        # Invalid wrong_way_status for red_light violation (must be NULL)
+        bad_obs = Observation(
+            device_id=dev.device_id,
+            violation_type="red_light",
+            plate_no="hash",
+            lat=18.5,
+            lon=73.8,
+            location="POINT(73.8 18.5)",
+            ts=datetime.now(timezone.utc),
+            event_nonce="bad-nonce-1",
+            signature="sig",
+            wrong_way_status="confirmed",  # Violates ck_observations_wrong_way_status!
+        )
+        db.add(bad_obs)
+        with pytest.raises(IntegrityError):
+            await db.commit()
+        await db.rollback()
+

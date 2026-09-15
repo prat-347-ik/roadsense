@@ -129,18 +129,27 @@ async def get_evidence_media(
             },
         )
 
-    # Simulated/offline fallback: return sample MP4 container bytes for browser video players
-    # Minimal valid MP4 container (ftyp + moov + mdat)
-    sample_mp4 = (
-        b"\x00\x00\x00\x20ftypisom\x00\x00\x02\x00isomiso2avc1mp41"
-        b"\x00\x00\x00\x08free\x00\x00\x00\x08mdat"
-    )
-    return Response(
-        content=sample_mp4,
-        media_type="video/mp4",
-        headers={
-            "Content-Disposition": f"inline; filename={event_nonce}.mp4",
-            "Accept-Ranges": "bytes",
-        },
+    # Simulated/offline fallback: only if explicitly enabled via settings.USE_SIMULATED_EVIDENCE
+    from app.core.config import settings
+
+    if settings.USE_SIMULATED_EVIDENCE:
+        sample_mp4 = (
+            b"\x00\x00\x00\x20ftypisom\x00\x00\x02\x00isomiso2avc1mp41"
+            b"\x00\x00\x00\x08free\x00\x00\x00\x08mdat"
+        )
+        return Response(
+            content=sample_mp4,
+            media_type="video/mp4",
+            headers={
+                "Content-Disposition": f"inline; filename={event_nonce}.mp4",
+                "Accept-Ranges": "bytes",
+                "X-Evidence-Simulated": "true",
+            },
+        )
+
+    # When storage_ref exists but retrieval fails, return explicit gateway error
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail="Evidence retrieval temporarily unavailable",
     )
 

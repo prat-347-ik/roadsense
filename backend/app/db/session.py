@@ -2,6 +2,9 @@ from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from app.core.config import settings
 
+from urllib.parse import urlparse
+from app.core.logging_config import logger
+
 _engine = None
 _AsyncSessionLocal = None
 
@@ -9,28 +12,30 @@ _AsyncSessionLocal = None
 def get_engine():
     global _engine
     if _engine is None:
+        db_backend = (settings.DB_BACKEND or "").lower()
         db_url = settings.DATABASE_URL
-        # If postgres host is 'postgres' (docker internal name) and not reachable or requested sqlite, fallback to local sqlite file
-        if "postgres:" in db_url or "localhost:5432" in db_url:
-            import socket
-            try:
-                # Quick test if postgres host resolves
-                socket.gethostbyname("postgres")
-            except Exception:
-                db_url = "sqlite+aiosqlite:///roadsense_dev.db"
 
-        try:
+        if db_backend == "sqlite" or db_url.startswith("sqlite"):
+            sqlite_url = "sqlite+aiosqlite:///roadsense_dev.db" if not db_url.startswith("sqlite") else db_url
+            logger.info("Database backend selected: SQLITE (target: %s)", sqlite_url)
+            _engine = create_async_engine(
+                sqlite_url,
+                echo=False,
+                future=True,
+            )
+        else:
+            # Mask credentials in logs
+            try:
+                parsed = urlparse(db_url)
+                sanitized = f"{parsed.scheme}://{parsed.username}:***@{parsed.hostname}:{parsed.port}{parsed.path}"
+            except Exception:
+                sanitized = "configured DATABASE_URL"
+            logger.info("Database backend selected: POSTGRESQL (target: %s)", sanitized)
             _engine = create_async_engine(
                 db_url,
                 echo=False,
                 future=True,
                 pool_pre_ping=True,
-            )
-        except Exception:
-            _engine = create_async_engine(
-                "sqlite+aiosqlite:///roadsense_dev.db",
-                echo=False,
-                future=True,
             )
     return _engine
 

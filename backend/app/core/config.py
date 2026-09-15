@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     SWEEP_INTERVAL_SECONDS: int = 60          # stale-observation sweep cadence
     EVIDENCE_TTL_CHECK_INTERVAL_SECONDS: int = 3600  # evidence-TTL sweep cadence
 
+    # Operational & Development Flags
+    USE_SIMULATED_EVIDENCE: bool = False
+    AUTO_INIT_DB: bool = False
+    DB_BACKEND: Optional[str] = None
+
     SENTRY_DSN: Optional[str] = None
 
     model_config = SettingsConfigDict(

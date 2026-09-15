@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     Column,
     DateTime,
     Float,
@@ -48,6 +49,9 @@ incident_observations = Table(
 
 class Device(Base):
     __tablename__ = "devices"
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'suspended', 'revoked')", name="ck_devices_status"),
+    )
 
     device_id = Column(String(128), primary_key=True)
     public_key = Column(Text, nullable=False)
@@ -60,6 +64,9 @@ class Device(Base):
 
 class Reviewer(Base):
     __tablename__ = "reviewers"
+    __table_args__ = (
+        CheckConstraint("role IN ('reviewer', 'admin')", name="ck_reviewers_role"),
+    )
 
     id = pk_bigint_column()
     email = Column(String(320), nullable=False, unique=True)
@@ -72,6 +79,18 @@ class Reviewer(Base):
 
 class Observation(Base):
     __tablename__ = "observations"
+    __table_args__ = (
+        CheckConstraint(
+            "violation_type IN ('wrong_side', 'red_light')",
+            name="ck_observations_violation_type",
+        ),
+        CheckConstraint(
+            "(violation_type = 'red_light' AND wrong_way_status IS NULL) OR "
+            "(violation_type = 'wrong_side' AND wrong_way_status IN "
+            "('unconfirmed', 'confirmed', 'rejected'))",
+            name="ck_observations_wrong_way_status",
+        ),
+    )
 
     id = pk_bigint_column()
     device_id = Column(String(128), ForeignKey("devices.device_id"), nullable=False)
@@ -95,6 +114,16 @@ class Observation(Base):
 
 class CandidateIncident(Base):
     __tablename__ = "candidate_incidents"
+    __table_args__ = (
+        CheckConstraint(
+            "violation_type IN ('wrong_side', 'red_light')",
+            name="ck_candidate_incidents_violation_type",
+        ),
+        CheckConstraint(
+            "status IN ('candidate', 'corroborated', 'corroborated_no_evidence', 'confirmed', 'rejected')",
+            name="ck_candidate_incidents_status",
+        ),
+    )
 
     id = pk_bigint_column()
     violation_type = Column(String(32), nullable=False)

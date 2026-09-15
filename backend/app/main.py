@@ -26,17 +26,19 @@ async def lifespan(app: FastAPI):
     setup_logging()
     init_sentry()
 
-    # Ensure tables exist and seed default reviewer
-    try:
-        from app.db.session import get_engine
-        from app.db.seed import seed_default_reviewer
-        from app.models.entities import Base
-        engine = get_engine()
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        await seed_default_reviewer()
-    except Exception as e:
-        logger.warning(f"Database auto-init / reviewer seed warning: {e}")
+    # Ensure tables exist and seed default reviewer only when explicitly enabled (local standalone dev)
+    if settings.AUTO_INIT_DB:
+        try:
+            from app.db.session import get_engine
+            from app.db.seed import seed_default_reviewer
+            from app.models.entities import Base
+            engine = get_engine()
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            await seed_default_reviewer()
+            logger.info("Database auto-init and seed executed (AUTO_INIT_DB=True).")
+        except Exception as e:
+            logger.warning(f"Database auto-init / reviewer seed warning: {e}")
 
     # Start background sweep scheduler (APScheduler AsyncIOScheduler)
     scheduler = None

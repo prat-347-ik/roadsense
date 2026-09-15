@@ -91,7 +91,7 @@ async def get_incident(
     sorted_obs = sorted(incident.observations, key=lambda x: x.ts)
     obs_diagnostics: dict[int, tuple[Optional[str], Optional[str]]] = {}
 
-    if incident.violation_type == "wrong_side" and (incident.status == "rejected" or any(o.wrong_way_status == "rejected" for o in sorted_obs)):
+    if incident.violation_type == "wrong_side" and incident.status == "rejected":
         if len(sorted_obs) == 1:
             incident_rejection_reason = "overtaking_artifact"
             incident_rejection_details = "Solitary observation aged past corroboration window with no corroborating vehicle report (momentary overtaking artifact)."
@@ -118,8 +118,7 @@ async def get_incident(
                 incident_rejection_details = eval_res.details or "Trajectory failed progression criteria."
 
             for o in sorted_obs:
-                if o.wrong_way_status == "rejected" or incident.status == "rejected":
-                    obs_diagnostics[o.id] = (incident_rejection_reason, incident_rejection_details)
+                obs_diagnostics[o.id] = (incident_rejection_reason, incident_rejection_details)
 
     elif incident.status == "corroborated_no_evidence":
         incident_rejection_details = "Evidence collection request timed out before edge devices uploaded video/image clips."

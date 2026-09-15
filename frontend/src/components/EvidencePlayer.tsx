@@ -10,6 +10,7 @@ export const EvidencePlayer: React.FC<EvidencePlayerProps> = ({ evidenceItems })
   const [selectedNonce, setSelectedNonce] = useState<string>(
     evidenceItems[0]?.event_nonce || ''
   );
+  const [videoError, setVideoError] = useState<boolean>(false);
 
   if (evidenceItems.length === 0) {
     return (
@@ -37,7 +38,10 @@ export const EvidencePlayer: React.FC<EvidencePlayerProps> = ({ evidenceItems })
             return (
               <button
                 key={item.event_nonce}
-                onClick={() => setSelectedNonce(item.event_nonce)}
+                onClick={() => {
+                  setSelectedNonce(item.event_nonce);
+                  setVideoError(false);
+                }}
                 className={`px-3 py-2 rounded-lg text-xs font-medium border flex items-center gap-2 whitespace-nowrap transition-all ${
                   isSelected
                     ? 'bg-blue-600/20 border-blue-500 text-blue-300 shadow-md shadow-blue-500/10'
@@ -60,17 +64,28 @@ export const EvidencePlayer: React.FC<EvidencePlayerProps> = ({ evidenceItems })
       {/* Main Video Player Container */}
       <div className="rounded-xl border border-slate-800 bg-slate-950 overflow-hidden shadow-xl">
         <div className="relative aspect-video bg-black flex items-center justify-center">
-          {activeItem?.view_url ? (
+          {activeItem?.view_url && !videoError ? (
             <video
               key={activeItem.view_url}
               controls
               autoPlay={false}
               className="w-full h-full object-contain"
               poster=""
+              onError={() => setVideoError(true)}
             >
               <source src={activeItem.view_url} type="video/mp4" />
               Your browser does not support HTML5 video streaming.
             </video>
+          ) : videoError ? (
+            <div className="text-center p-8 space-y-3">
+              <Film className="w-10 h-10 text-rose-500/60 mx-auto" />
+              <div className="text-sm font-semibold text-rose-300">
+                Evidence Media Unavailable
+              </div>
+              <p className="text-xs text-slate-400 max-w-xs mx-auto">
+                Evidence retrieval returned 502/503 or clip object is temporarily unreachable in storage.
+              </p>
+            </div>
           ) : (
             <div className="text-center p-8 space-y-3">
               <Clock className="w-10 h-10 text-amber-500/60 mx-auto animate-pulse" />
