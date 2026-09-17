@@ -22,6 +22,10 @@ To eliminate false positives from edge-sensor glitches, momentary overtakes, or 
 - **MinIO**: High-performance S3-compatible object storage for securely storing uploaded video and image evidence clips and serving time-limited presigned viewing URLs.
 - **APScheduler (AsyncIOScheduler)**: Embedded background scheduler running directly inside the FastAPI process lifespan. Chosen over Celery Beat at this stage because it eliminates the operational overhead of running extra worker/beat daemon processes and extra broker dependencies while sharing the async SQLAlchemy connection pool for lightweight periodic database sweeps.
 
+### Sentry Error Tracking
+
+Set `SENTRY_DSN` in the local `.env` to enable real Sentry error tracking. Without a DSN, Sentry is a safe no-op; before any configured event is sent, raw plate values are redacted. See [`backend/app/core/sentry.py`](backend/app/core/sentry.py) for the initialization and sanitization details.
+
 ---
 
 ## 3. Data Model

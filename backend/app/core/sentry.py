@@ -1,5 +1,8 @@
+import logging
 from typing import Any
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def sanitize_data_recursively(data: Any) -> Any:
@@ -8,7 +11,7 @@ def sanitize_data_recursively(data: Any) -> Any:
         sanitized = {}
         for k, v in data.items():
             k_lower = str(k).lower()
-            if "plate_no" in k_lower or (k_lower == "plate" and not k_lower.startswith("hashed_")):
+            if "plate" in k_lower and not k_lower.startswith("hashed_"):
                 sanitized[k] = "[REDACTED]"
             else:
                 sanitized[k] = sanitize_data_recursively(v)
@@ -19,32 +22,11 @@ def sanitize_data_recursively(data: Any) -> Any:
 
 
 def sentry_before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any]:
-    """Sentry before_send callback to guarantee raw plate_no is completely stripped
-
-    from exception traces, request data, extra context, and breadcrumbs.
-    """
+    """Redact raw plate values from every nested part of a Sentry event."""
     if not event:
         return event
 
-    # Sanitize request body / query if present
-    if "request" in event:
-        req = event["request"]
-        if "data" in req:
-            req["data"] = sanitize_data_recursively(req["data"])
-        if "query_string" in req:
-            req["query_string"] = sanitize_data_recursively(req["query_string"])
-
-    # Sanitize breadcrumbs
-    if "breadcrumbs" in event and "values" in event["breadcrumbs"]:
-        for breadcrumb in event["breadcrumbs"]["values"]:
-            if "data" in breadcrumb:
-                breadcrumb["data"] = sanitize_data_recursively(breadcrumb["data"])
-
-    # Sanitize extra context
-    if "extra" in event:
-        event["extra"] = sanitize_data_recursively(event["extra"])
-
-    return event
+    return sanitize_data_recursively(event)
 
 
 def init_sentry() -> None:
@@ -59,5 +41,9 @@ def init_sentry() -> None:
                 send_default_pii=False,
                 traces_sample_rate=0.1,
             )
+            logger.info("Sentry error tracking initialized successfully.")
         except ImportError:
-            pass
+            logger.warning(
+                "SENTRY_DSN is configured, but sentry-sdk is not installed. "
+                "Error tracking is disabled. Run: pip install 'sentry-sdk>=2.0.0'"
+            )
