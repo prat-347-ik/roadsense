@@ -1,6 +1,7 @@
 .env
 __pycache__/
 *.py[cod]
+*.pt
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
@@ -11,3 +12,5 @@ dist/
 frontend/.vite/
 backend/venv/
 .vscode/settings.json
+edge/detection/evaluation_output/
+edge/detection/output/
