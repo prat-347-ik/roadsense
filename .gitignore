@@ -14,3 +14,6 @@ backend/venv/
 .vscode/settings.json
 edge/detection/evaluation_output/
 edge/detection/output/
+edge/runs/
+runs/
+
