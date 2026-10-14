@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import re
+import logging
 from typing import Any
 import cv2
 import easyocr
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 # Global cached reader for standalone function calls
 _DEFAULT_READER: easyocr.Reader | None = None
@@ -42,13 +45,21 @@ def normalize_plate_text(raw_text: str) -> str | None:
     return text
 
 
-def preprocess_crop(crop: np.ndarray, target_height: int = 64) -> np.ndarray:
-    """Basic crop preprocessing for small license plate bounding boxes.
+def preprocess_crop(
+    crop: np.ndarray,
+    target_height: int = 64,
+    grayscale: bool = False,
+) -> np.ndarray:
+    """Optionally convert a plate crop to grayscale and upscale it.
 
-    Upscales small crops proportionally to ensure characters have enough pixel resolution.
+    Grayscale is opt-in so existing OCR behavior remains unchanged by default.
+    Upscaling increases displayed pixel dimensions but cannot recover missing detail.
     """
     if crop is None or crop.size == 0:
         return crop
+
+    if grayscale and crop.ndim == 3:
+        crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
 
     h, w = crop.shape[:2]
     if h < target_height:
@@ -79,6 +90,7 @@ class PlateReader:
         crop: np.ndarray,
         preprocess: bool = True,
         allowlist: str | None = DEFAULT_OCR_ALLOWLIST,
+        grayscale: bool = False,
     ) -> str | None:
         """Extract license plate text from a cropped image array.
 
@@ -90,7 +102,7 @@ class PlateReader:
             return None
 
         try:
-            processed = preprocess_crop(crop) if preprocess else crop
+            processed = preprocess_crop(crop, grayscale=grayscale) if preprocess else crop
             # EasyOCR expects RGB/BGR array
             read_kwargs: dict[str, Any] = {"detail": 1, "paragraph": False}
             if allowlist:
@@ -98,6 +110,11 @@ class PlateReader:
 
             results = self.reader.readtext(processed, **read_kwargs)
             if not results:
+                logger.debug(
+                    "EasyOCR returned no text: original_crop=%s processed_crop=%s",
+                    crop.shape,
+                    processed.shape,
+                )
                 return None
 
             # Concatenate detected text parts ordered by horizontal position
@@ -106,10 +123,18 @@ class PlateReader:
 
             return normalize_plate_text(combined_text)
         except Exception:
+            logger.exception(
+                "EasyOCR failed while reading crop with shape %s",
+                crop.shape,
+            )
             return None
 
 
-def read_plate(crop: np.ndarray, allowlist: str | None = DEFAULT_OCR_ALLOWLIST) -> str | None:
+def read_plate(
+    crop: np.ndarray,
+    allowlist: str | None = DEFAULT_OCR_ALLOWLIST,
+    grayscale: bool = False,
+) -> str | None:
     """Functional interface for license plate reading.
 
     Extracts text from a crop using the default EasyOCR instance.
@@ -121,6 +146,6 @@ def read_plate(crop: np.ndarray, allowlist: str | None = DEFAULT_OCR_ALLOWLIST) 
     try:
         reader = _get_default_reader()
         plate_reader = PlateReader(reader=reader)
-        return plate_reader.read_plate(crop, allowlist=allowlist)
+        return plate_reader.read_plate(crop, allowlist=allowlist, grayscale=grayscale)
     except Exception:
         return None
