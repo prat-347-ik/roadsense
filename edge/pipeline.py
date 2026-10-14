@@ -106,6 +106,7 @@ class PipelineConfig:
     location: tuple[float, float] = (18.5204, 73.8567)
     flush_interval_seconds: float = 5.0
     evidence_poll_interval_seconds: float = 10.0
+    pending_candidate_timeout_seconds: float = 30.0
     realtime: bool = False
     target_fps: float | None = None
     max_frames: int | None = None
@@ -256,6 +257,7 @@ class EdgePipeline:
         finalized_track_ids: set[int] | None = None,
     ) -> None:
         finalized_ids = set(finalized_track_ids or ())
+        now = time.perf_counter()
 
         # The tracker finalizes OCR as tracks expire. Lost tracks are not
         # necessarily returned in the active-track list for this frame.
@@ -275,6 +277,21 @@ class EdgePipeline:
                 track.track_id in finalized_ids
                 or track.ocr_attempted
             )
+            if (
+                not is_finalized
+                and now - pending.captured_at
+                >= self.config.pending_candidate_timeout_seconds
+            ):
+                track.finalize_ocr(
+                    gating_threshold=self.tracker.gating_threshold
+                )
+                is_finalized = True
+                logger.warning(
+                    "Candidate track=%s type=%s reached OCR timeout; "
+                    "finalizing with the current best plate crop.",
+                    track.track_id,
+                    pending.violation_type,
+                )
 
             # Preserve the optional custom resolver, but call it at most
             # once per pending candidate.

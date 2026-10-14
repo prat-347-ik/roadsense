@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 import numpy as np
 import pytest
@@ -168,7 +169,7 @@ def test_pending_candidate_waits_for_delayed_ocr(
     decision = _make_candidate_decision()
 
     pipeline._emit_candidate(
-        track, decision, frame, (18.5204, 73.8567), 1.0
+        track, decision, frame, (18.5204, 73.8567), time.perf_counter()
     )
 
     key = (track.track_id, "wrong_side")
@@ -207,7 +208,7 @@ def test_pending_candidate_without_plate_is_skipped_at_finalization(
         _make_candidate_decision(),
         frame,
         (18.5204, 73.8567),
-        1.0,
+        time.perf_counter(),
     )
 
     assert (track.track_id, "wrong_side") in pipeline._pending_candidates
@@ -218,6 +219,47 @@ def test_pending_candidate_without_plate_is_skipped_at_finalization(
     assert queue.get_queue_depth() == 0
     assert pipeline.metrics.skipped_without_plate == 1
     assert track.ocr_attempted is True
+
+
+def test_pending_candidate_timeout_finalizes_a_track_that_stays_active(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Continuous operation must not leave a candidate pending forever."""
+    ocr_calls: list[np.ndarray] = []
+
+    def fake_read_plate(crop: np.ndarray) -> str:
+        ocr_calls.append(crop)
+        return "MH12AB1234"
+
+    monkeypatch.setattr("edge.tracking.tracker.read_plate", fake_read_plate)
+
+    frame = np.zeros((120, 160, 3), dtype=np.uint8)
+    queue = ObservationQueue(tmp_path / "timeout.db")
+    pipeline = EdgePipeline(
+        FakeSource([]),
+        FakeDetector([]),
+        FakeDetector([]),
+        tracker=IOUTracker(gating_threshold=0),
+        queue=queue,
+        config=PipelineConfig(pending_candidate_timeout_seconds=1.0),
+    )
+    track = _make_test_track()
+    track.best_plate_crop = np.ones((10, 80, 3), dtype=np.uint8)
+    track.best_plate_width = 80
+    pipeline.tracker.active_tracks[track.track_id] = track
+    pipeline._emit_candidate(
+        track,
+        _make_candidate_decision(),
+        frame,
+        (18.5204, 73.8567),
+        time.perf_counter() - 2.0,
+    )
+
+    assert track.ocr_attempted is True
+    assert len(ocr_calls) == 1
+    assert pipeline._pending_candidates == {}
+    assert queue.get_queue_depth() == 1
 
 
 def test_repeated_candidate_is_enqueued_only_once(
