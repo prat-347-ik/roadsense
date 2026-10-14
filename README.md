@@ -186,6 +186,24 @@ The evaluator uses 25 frames spread across clips from `C:\Users\Pratik\Project_R
 
 Weights and generated visualizations are ignored by Git. The current comparison is documented in the project vault's `10 Research/Experiments.md`.
 
+### Continuous edge pipeline
+
+The capture boundary and continuous orchestration loop are available under
+[`edge/capture/`](edge/capture/) and [`edge/pipeline.py`](edge/pipeline.py). The runner
+supports a webcam, a recorded video/`.ts` file through OpenCV, or a timed replay of
+extracted JPEGs:
+
+```powershell
+.\.venv\Scripts\python edge\main.py --source C:\path\to\clip.ts --realtime --duration-seconds 300
+.\.venv\Scripts\python edge\main.py --source C:\path\to\extracted_frames --image-fps 1 --max-frames 300
+```
+
+Each run logs capture, vehicle detection, plate detection, tracking, and rules timing,
+candidate end-to-end latency, queue servicing, and process memory/CPU telemetry. The
+final log line includes the same data as a JSON-like metrics summary. Observations are
+written to the persistent local queue before uplink, so a backend outage does not stop
+capture; the queue retries during later flush intervals.
+
 ## API Surface
 
 The versioned API is rooted at `/v1`:

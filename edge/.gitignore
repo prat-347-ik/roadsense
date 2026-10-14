@@ -6,31 +6,34 @@
 
 # Local dataset exports and archives
 data/
-runs/
 *.zip
 
-# Evaluation output directories
-detection/evaluation_output/
-detection/evaluation_roboflow_model/
-detection/evaluation_finetuned_plate_model/
-detection/output/
-
-# Temporary local shortlist tooling and scratch audit scripts
+# Temporary local shortlist tooling and generated machine-specific paths
 detection/build_plate_shortlist.py
 detection/plate_shortlist.txt
-detection/plate_labeling_candidates.txt
-detection/prepare_labeling_candidates.py
-detection/analyze_roboflow_results.py
-detection/analyze_finetuned_eval.py
-detection/audit_frame_ground_truth.py
-detection/audit_out_of_sample.py
-detection/audit_summary.py
-detection/check_frame_details.py
-detection/create_diagnostics.py
-detection/generate_crop_grid.py
-detection/inspect_crops_detail.py
-detection/inspect_samples_1_to_11.py
-detection/print_detections.py
-detection/tabulate_results.py
-detection/verify_each_crop.py
 
+# Local datasets and generated evaluation artifacts
+data/
+experiments/
+detection/evaluation_*/
+detection/recheck_*/
+detection/resolution_test/
+detection/plate_labeling_candidates.txt
+organize_experiments.py
+
+# One-off evaluation and audit scripts
+rules/eval_*.py
+tracking/analyze_*.py
+tracking/check_*.py
+tracking/eval_*.py
+tracking/find_*.py
+tracking/inspect_*.py
+tracking/list_*.py
+tracking/run_*.py
+tracking/scan_*.py
+uplink/audit_*.py
+uplink/test_pipeline_to_backend.py
+ocr/*_experiment/
+ocr/*_audit/
+ocr/*_results/
+storage/test_scratch/

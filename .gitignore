@@ -17,3 +17,21 @@ edge/detection/output/
 edge/runs/
 runs/
 
+# Device credentials & private keys
+*private_key*
+*.pem
+*.key
+edge/uplink/keys/
+
+# Local datasets, extracted footage, and experiment-only tooling
+edge/data/
+edge/experiments/
+edge/organize_experiments.py
+edge/detection/evaluation_*/
+edge/detection/recheck_*/
+edge/detection/resolution_test/
+edge/detection/plate_labeling_candidates.txt
+repomix-output.xml
+
+# Local development database
+backend/roadsense_dev.db

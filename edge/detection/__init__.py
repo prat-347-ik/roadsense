@@ -2,7 +2,7 @@
 
 from .detector import Detection, WANTED_CLASSES, YOLODetector
 from .plate_detector import YOLOPlateDetector, draw_plate_detections
-from .traffic_light_color import classify_traffic_light_color
+from .traffic_light_color import TrafficLightResult, classify_traffic_light_color
 
 __all__ = [
 	"Detection",
@@ -10,6 +10,6 @@ __all__ = [
 	"YOLODetector",
 	"YOLOPlateDetector",
 	"draw_plate_detections",
+	"TrafficLightResult",
 	"classify_traffic_light_color",
 ]
-
