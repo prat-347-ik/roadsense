@@ -65,7 +65,12 @@ class Track:
 
     # OCR outcome (executed on track completion / loss)
     plate_text: str | None = None
+    plate_confidence: float = 0.0
     ocr_attempted: bool = False
+    ocr_engine: str = "easyocr"
+    fpo_model: str = "cct-xs-v2-global-model"
+    plate_min_conf: float = 0.0
+    funnel_outcome: str | None = None
 
     def __post_init__(self) -> None:
         if not self.bbox_history and self.current_bbox:
@@ -183,14 +188,39 @@ class Track:
             displacements.append((float(curr_x - prev_x), float(curr_y - prev_y)))
         return displacements
 
-    def finalize_ocr(self, gating_threshold: float = MIN_PLATE_WIDTH_GATING) -> str | None:
+    def finalize_ocr(
+        self,
+        gating_threshold: float = MIN_PLATE_WIDTH_GATING,
+        ocr_engine: str | None = None,
+        fpo_model: str | None = None,
+        plate_min_conf: float | None = None,
+    ) -> str | None:
         """Execute OCR once on the best recorded plate frame if above gating threshold."""
         if self.ocr_attempted:
             return self.plate_text
 
         self.ocr_attempted = True
+        engine = ocr_engine or self.ocr_engine
+        model = fpo_model or self.fpo_model
+        min_conf = self.plate_min_conf if plate_min_conf is None else plate_min_conf
+
         if self.best_plate_crop is not None and self.best_plate_width >= gating_threshold:
-            self.plate_text = read_plate(self.best_plate_crop)
+            if engine == "fpo":
+                from edge.ocr.fpo_reader import read_plate as fpo_read_plate
+
+                res = fpo_read_plate(self.best_plate_crop, model_name=model, return_confidence=True)
+                if isinstance(res, tuple):
+                    self.plate_text, self.plate_confidence = res
+                else:
+                    self.plate_text = res
+            else:
+                self.plate_text = read_plate(self.best_plate_crop)
+
+            if self.plate_text is not None:
+                if min_conf > 0.0 and self.plate_confidence < min_conf:
+                    self.funnel_outcome = "OCR_LOW_CONFIDENCE"
+                else:
+                    self.funnel_outcome = "OK"
 
         return self.plate_text
 
@@ -213,6 +243,11 @@ class IOUTracker:
         min_hits_to_confirm: int = 2,
         gating_threshold: float = MIN_PLATE_WIDTH_GATING,
         plate_assign: str = "first",
+        ocr_engine: str = "easyocr",
+        fpo_model: str = "cct-xs-v2-global-model",
+        plate_padding_ratio: float | None = None,
+        fpo_padding: float | None = None,
+        plate_min_conf: float = 0.0,
     ):
         if plate_assign not in ("first", "one_to_one"):
             raise ValueError(
@@ -223,6 +258,16 @@ class IOUTracker:
         self.max_lost_frames = max_lost_frames
         self.min_hits_to_confirm = min_hits_to_confirm
         self.gating_threshold = gating_threshold
+        self.ocr_engine = ocr_engine
+        self.fpo_model = fpo_model
+        self.plate_min_conf = plate_min_conf
+
+        if fpo_padding is not None and ocr_engine == "fpo":
+            self.plate_padding_ratio = fpo_padding
+        elif plate_padding_ratio is not None:
+            self.plate_padding_ratio = plate_padding_ratio
+        else:
+            self.plate_padding_ratio = 0.0 if ocr_engine == "fpo" else 0.15
 
         self.next_track_id: int = 1
         self.active_tracks: dict[int, Track] = {}
@@ -233,8 +278,10 @@ class IOUTracker:
         self,
         plate_bbox: list[float],
         frame_image: np.ndarray | None,
-        padding_ratio: float = 0.15,
+        padding_ratio: float | None = None,
     ) -> np.ndarray | None:
+        if padding_ratio is None:
+            padding_ratio = self.plate_padding_ratio
         """Extract padded crop from full-resolution frame image."""
         if frame_image is None or plate_bbox is None:
             return None
@@ -478,6 +525,9 @@ class IOUTracker:
                     vehicle_class=det.class_name,
                     first_frame_idx=self.current_frame_idx,
                     last_frame_idx=self.current_frame_idx,
+                    ocr_engine=self.ocr_engine,
+                    fpo_model=self.fpo_model,
+                    plate_min_conf=self.plate_min_conf,
                 )
                 new_track.record_plate_observation(
                     plate_bbox=det.plate_bbox,
@@ -496,7 +546,12 @@ class IOUTracker:
                 track.frames_since_matched += 1
                 if track.frames_since_matched > self.max_lost_frames:
                     # Finalize OCR on the best recorded frame before discarding
-                    track.finalize_ocr(gating_threshold=self.gating_threshold)
+                    track.finalize_ocr(
+                        gating_threshold=self.gating_threshold,
+                        ocr_engine=self.ocr_engine,
+                        fpo_model=self.fpo_model,
+                        plate_min_conf=self.plate_min_conf,
+                    )
                     self.lost_tracks.append(track)
                     to_delete.append(tid)
 

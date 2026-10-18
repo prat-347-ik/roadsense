@@ -111,6 +111,7 @@ class PipelineConfig:
     target_fps: float | None = None
     max_frames: int | None = None
     duration_seconds: float | None = None
+    plate_min_conf: float = 0.0
 
 
 @dataclass
@@ -311,18 +312,33 @@ class EdgePipeline:
                 pending.decision, "plate_text", None
             )
 
-            if not plate_text:
+            is_low_conf = False
+            if plate_text and self.config.plate_min_conf > 0.0:
+                if track.plate_confidence < self.config.plate_min_conf:
+                    is_low_conf = True
+
+            if not plate_text or is_low_conf:
                 if not is_finalized:
                     continue
 
                 self.metrics.skipped_without_plate += 1
                 self._pending_candidates.pop(key, None)
-                logger.info(
-                    "Candidate track=%s type=%s skipped: "
-                    "OCR produced no readable plate after track completion.",
-                    track.track_id,
-                    pending.violation_type,
-                )
+                if is_low_conf:
+                    logger.info(
+                        "Candidate track=%s type=%s skipped: "
+                        "OCR confidence %.4f below minimum threshold %.4f (outcome: OCR_LOW_CONFIDENCE).",
+                        track.track_id,
+                        pending.violation_type,
+                        track.plate_confidence,
+                        self.config.plate_min_conf,
+                    )
+                else:
+                    logger.info(
+                        "Candidate track=%s type=%s skipped: "
+                        "OCR produced no readable plate after track completion.",
+                        track.track_id,
+                        pending.violation_type,
+                    )
                 continue
 
             burst = assemble_burst_from_decision(
@@ -536,7 +552,10 @@ class EdgePipeline:
                 continue
 
             track.finalize_ocr(
-                gating_threshold=self.tracker.gating_threshold
+                gating_threshold=self.tracker.gating_threshold,
+                ocr_engine=self.tracker.ocr_engine,
+                fpo_model=self.tracker.fpo_model,
+                plate_min_conf=self.config.plate_min_conf,
             )
             if track.ocr_attempted:
                 finalized_ids.add(track_id)
