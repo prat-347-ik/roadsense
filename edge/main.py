@@ -18,6 +18,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--location", nargs=2, type=float, metavar=("LAT", "LON"), default=(18.5204, 73.8567))
     parser.add_argument("--vehicle-model", default="yolov8n.pt")
     parser.add_argument("--plate-model", default=None)
+    parser.add_argument("--plate-geometry", choices=["letterbox", "stretch640"], default="letterbox", help="Plate detection input geometry.")
+    parser.add_argument("--plate-assign", choices=["first", "one_to_one"], default="first", help="Plate-to-track association strategy.")
     parser.add_argument("--max-frames", type=int, default=None)
     parser.add_argument("--duration-seconds", type=float, default=None)
     parser.add_argument("--realtime", action="store_true")
@@ -39,10 +41,12 @@ def main() -> None:
         except ValueError:
             pass
         source = WebcamFrameSource(source_value, location=tuple(args.location))
+    from edge.tracking.tracker import IOUTracker
     pipeline = EdgePipeline(
         source,  # type: ignore[arg-type]
         YOLODetector(args.vehicle_model),
-        YOLOPlateDetector(args.plate_model),
+        YOLOPlateDetector(args.plate_model, plate_geometry=args.plate_geometry),
+        tracker=IOUTracker(plate_assign=args.plate_assign),
         config=PipelineConfig(
             location=tuple(args.location),
             max_frames=args.max_frames,
