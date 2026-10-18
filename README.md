@@ -202,7 +202,9 @@ Each run logs capture, vehicle detection, plate detection, tracking, and rules t
 candidate end-to-end latency, queue servicing, and process memory/CPU telemetry. The
 final log line includes the same data as a JSON-like metrics summary. Observations are
 written to the persistent local queue before uplink, so a backend outage does not stop
-capture; the queue retries during later flush intervals.
+capture; the queue retries during later flush intervals. A candidate waits for deferred
+track OCR, but is bounded by `PipelineConfig.pending_candidate_timeout_seconds`
+(30 seconds by default) so a continuously active track cannot remain pending forever.
 
 ## API Surface
 

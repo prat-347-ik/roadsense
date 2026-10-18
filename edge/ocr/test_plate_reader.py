@@ -34,3 +34,37 @@ def test_read_plate_empty():
     # Blank black image should return None cleanly without error
     blank = np.zeros((40, 100, 3), dtype=np.uint8)
     assert read_plate(blank) is None
+
+def test_preprocess_crop_grayscale():
+    small = np.zeros((30, 60, 3), dtype=np.uint8)
+    processed = preprocess_crop(small, target_height=64, grayscale=True)
+    assert processed.ndim == 2
+    assert processed.shape == (64, 128)
+
+
+def test_preprocess_crop_keeps_color_by_default():
+    small = np.zeros((30, 60, 3), dtype=np.uint8)
+    processed = preprocess_crop(small, target_height=64)
+    assert processed.ndim == 3
+    assert processed.shape == (64, 128, 3)
+
+
+def test_preprocess_crop_preserves_color_by_default():
+    small = np.zeros((30, 60, 3), dtype=np.uint8)
+    small[:, :, 2] = 255
+
+    processed = preprocess_crop(small, target_height=64)
+
+    assert processed.ndim == 3
+    assert processed.shape == (64, 128, 3)
+    assert processed[:, :, 2].mean() > processed[:, :, 0].mean()
+
+
+def test_preprocess_crop_grayscale_converts_color_image():
+    small = np.zeros((30, 60, 3), dtype=np.uint8)
+    small[:, :, 2] = 255
+
+    processed = preprocess_crop(small, target_height=64, grayscale=True)
+
+    assert processed.ndim == 2
+    assert processed.shape == (64, 128)

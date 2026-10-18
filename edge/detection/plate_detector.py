@@ -28,6 +28,7 @@ class YOLOPlateDetector:
         self,
         model_path: str | os.PathLike[str] | None = None,
         confidence_threshold: float = 0.25,
+        plate_geometry: str = "letterbox",
     ):
         if model_path is None:
             model_path = DEFAULT_MODEL_PATH
@@ -39,6 +40,12 @@ class YOLOPlateDetector:
         self.confidence_threshold = float(confidence_threshold)
         if not 0.0 <= self.confidence_threshold <= 1.0:
             raise ValueError("confidence_threshold must be between 0.0 and 1.0.")
+
+        if plate_geometry not in ("letterbox", "stretch640"):
+            raise ValueError(
+                f"Invalid plate_geometry '{plate_geometry}'; must be 'letterbox' or 'stretch640'."
+            )
+        self.plate_geometry = plate_geometry
 
         self.model = YOLO(str(self.model_path))
 
@@ -71,7 +78,49 @@ class YOLOPlateDetector:
     def detect(self, source: Any) -> list[Detection]:
         """Run plate detection and return filtered bounding boxes."""
         frame = self._coerce_frame(source)
+        h, w = frame.shape[:2]
 
+        if self.plate_geometry == "stretch640":
+            resized = cv2.resize(frame, (640, 640), interpolation=cv2.INTER_LINEAR)
+            results = self.model(
+                resized,
+                imgsz=640,
+                conf=self.confidence_threshold,
+                iou=0.7,
+                verbose=False,
+            )
+            if not results or len(results) == 0:
+                return []
+
+            result = results[0]
+            boxes = getattr(result, "boxes", None)
+            if boxes is None:
+                return []
+
+            detections: list[Detection] = []
+            for box in boxes:
+                confidence = float(box.conf[0])
+                if confidence < self.confidence_threshold:
+                    continue
+
+                bx = box.xyxy[0].cpu().numpy() if hasattr(box.xyxy[0], "cpu") else box.xyxy[0]
+                x1 = float(bx[0]) * w / 640.0
+                y1 = float(bx[1]) * h / 640.0
+                x2 = float(bx[2]) * w / 640.0
+                y2 = float(bx[3]) * h / 640.0
+                bbox: BoundingBox = (x1, y1, x2, y2)
+                detections.append(
+                    Detection(
+                        class_id=int(box.cls[0]),
+                        class_name="plate",
+                        confidence=confidence,
+                        bbox=bbox,
+                    )
+                )
+
+            return detections
+
+        # Default: letterbox (Ultralytics default)
         results = self.model(frame, verbose=False)
         if not results or len(results) == 0:
             return []
