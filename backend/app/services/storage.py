@@ -11,17 +11,19 @@ from app.core.logging_config import logger
 
 class StorageService:
     def __init__(self) -> None:
-        endpoint = settings.MINIO_ENDPOINT_URL.replace("http://", "").replace("https://", "")
+        self.endpoint = settings.MINIO_ENDPOINT_URL.replace("http://", "").replace("https://", "")
         self.bucket = settings.MINIO_BUCKET
         self._connected = False
+        self.client = self._init_client()
+
+    def _init_client(self) -> Optional[Minio]:
         try:
-            # Configure fast timeout for dev/testing when MinIO is offline
             http_client = urllib3.PoolManager(
-                timeout=urllib3.Timeout(connect=0.5, read=2.0),
+                timeout=urllib3.Timeout(connect=1.0, read=5.0),
                 retries=False,
             )
-            self.client = Minio(
-                endpoint,
+            return Minio(
+                self.endpoint,
                 access_key=settings.MINIO_ROOT_USER,
                 secret_key=settings.MINIO_ROOT_PASSWORD,
                 secure=settings.MINIO_ENDPOINT_URL.startswith("https"),
@@ -29,13 +31,15 @@ class StorageService:
             )
         except Exception as e:
             logger.warning(f"MinIO client initialization warning: {e}")
-            self.client = None
+            return None
 
     def ensure_bucket_exists(self) -> bool:
-        if not self.client:
-            return False
-        if self._connected:
+        if self._connected and self.client:
             return True
+        if not self.client:
+            self.client = self._init_client()
+            if not self.client:
+                return False
         try:
             if not self.client.bucket_exists(self.bucket):
                 self.client.make_bucket(self.bucket)
@@ -43,8 +47,16 @@ class StorageService:
             return True
         except Exception as e:
             logger.info(f"MinIO storage offline, operating in simulated storage mode: {e}")
-            self.client = None
+            self._connected = False
             return False
+
+    def _parse_object_name(self, storage_ref: str) -> str:
+        if storage_ref.startswith(f"minio://{self.bucket}/"):
+            return storage_ref[len(f"minio://{self.bucket}/"):]
+        if storage_ref.startswith("minio://"):
+            parts = storage_ref[len("minio://"):].split("/", 1)
+            return parts[1] if len(parts) > 1 else parts[0]
+        return storage_ref
 
     def upload_evidence(
         self,
@@ -54,7 +66,7 @@ class StorageService:
     ) -> str:
         """Upload evidence clip to MinIO and return storage_ref."""
         object_name = f"evidence/{event_nonce}.mp4"
-        if not self.client or not self.ensure_bucket_exists():
+        if not self.ensure_bucket_exists() or not self.client:
             # Simulated storage ref when MinIO container is offline
             return f"minio://{self.bucket}/{object_name}"
 
@@ -76,10 +88,10 @@ class StorageService:
         """Generate presigned download URL for evidence clip."""
         if not storage_ref:
             return ""
-        if not self.client or not self._connected:
+        if not self.ensure_bucket_exists() or not self.client:
             return storage_ref
 
-        object_name = storage_ref.replace(f"minio://{self.bucket}/", "")
+        object_name = self._parse_object_name(storage_ref)
         try:
             url = self.client.presigned_get_object(
                 bucket_name=self.bucket,
@@ -93,10 +105,10 @@ class StorageService:
 
     def get_evidence_bytes(self, storage_ref: str) -> tuple[Optional[bytes], str]:
         """Fetch raw bytes and content type for evidence clip."""
-        if not storage_ref or not self.client or not self._connected:
+        if not storage_ref or not self.ensure_bucket_exists() or not self.client:
             return None, "video/mp4"
 
-        object_name = storage_ref.replace(f"minio://{self.bucket}/", "")
+        object_name = self._parse_object_name(storage_ref)
         try:
             response = self.client.get_object(self.bucket, object_name)
             data = response.read()
@@ -114,3 +126,4 @@ class StorageService:
 
 
 storage_service = StorageService()
+
