@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
 import time
+from pathlib import Path
 from unittest.mock import MagicMock
 
-import cv2
 import numpy as np
 import pytest
 
@@ -27,7 +25,9 @@ def temp_storage_dirs(tmp_path: Path):
     return queue_db, buffer_dir
 
 
-def _make_sample_burst(nonce: str, plate: str = "MH12AB1234", violation: str = "wrong_side") -> dict:
+def _make_sample_burst(
+    nonce: str, plate: str = "MH12AB1234", violation: str = "wrong_side"
+) -> dict:
     return {
         "event_nonce": nonce,
         "device_id": "test-device-01",
@@ -43,6 +43,7 @@ def _make_sample_burst(nonce: str, plate: str = "MH12AB1234", violation: str = "
 # ==============================================================================
 # OBSERVATION QUEUE UNIT TESTS
 # ==============================================================================
+
 
 def test_queue_enqueue_and_operational_counts(temp_storage_dirs):
     queue_db, _ = temp_storage_dirs
@@ -69,14 +70,18 @@ def test_queue_enqueue_and_operational_counts(temp_storage_dirs):
 
 def test_queue_connection_error_and_exponential_backoff(temp_storage_dirs):
     queue_db, _ = temp_storage_dirs
-    q = ObservationQueue(db_path=queue_db, base_delay=2.0, max_delay=30.0, backoff_factor=2.0)
+    q = ObservationQueue(
+        db_path=queue_db, base_delay=2.0, max_delay=30.0, backoff_factor=2.0
+    )
 
     t0 = 1000.0
     q.enqueue(_make_sample_burst("nonce-err-1"), current_time=t0)
     q.enqueue(_make_sample_burst("nonce-err-2"), current_time=t0)
 
     mock_client = MagicMock()
-    mock_client.send_observation.side_effect = UplinkConnectionError("Network connection unreachable")
+    mock_client.send_observation.side_effect = UplinkConnectionError(
+        "Network connection unreachable"
+    )
 
     # 1. First flush at t0: fails with connection error
     stats1 = q.flush(mock_client, current_time=t0)
@@ -145,6 +150,7 @@ def test_queue_409_duplicate_counts_as_sent(temp_storage_dirs):
     q.enqueue(_make_sample_burst("nonce-dup-exc"))
 
     mock_client = MagicMock()
+
     def _mock_send(burst):
         if burst["event_nonce"] == "nonce-dup-dict":
             return {"status": "duplicate", "detail": "Already exists in DB"}
@@ -169,6 +175,7 @@ def test_queue_422_and_400_marks_failed_without_retry(temp_storage_dirs):
     q.enqueue(_make_sample_burst("nonce-400"))
 
     mock_client = MagicMock()
+
     def _mock_send(burst):
         if burst["event_nonce"] == "nonce-422":
             raise UplinkValidationError("HTTP 422: plate_no missing or invalid schema")
@@ -200,6 +207,7 @@ def test_queue_422_and_400_marks_failed_without_retry(temp_storage_dirs):
 # ==============================================================================
 # EVIDENCE BUFFER UNIT TESTS
 # ==============================================================================
+
 
 def test_evidence_buffer_store_and_retrieve_formats(temp_storage_dirs):
     _, buffer_dir = temp_storage_dirs
@@ -251,9 +259,13 @@ def test_evidence_buffer_ttl_expiration_and_cleanup(temp_storage_dirs):
     t0 = 5000.0
 
     # Clip 1: TTL = 10 seconds (expires at 5010.0)
-    p1 = buf.store_clip("nonce-short", b"short-lived video", ttl_seconds=10.0, current_time=t0)
+    p1 = buf.store_clip(
+        "nonce-short", b"short-lived video", ttl_seconds=10.0, current_time=t0
+    )
     # Clip 2: TTL = 60 seconds (expires at 5060.0)
-    p2 = buf.store_clip("nonce-long", b"longer-lived video", ttl_seconds=60.0, current_time=t0)
+    p2 = buf.store_clip(
+        "nonce-long", b"longer-lived video", ttl_seconds=60.0, current_time=t0
+    )
 
     assert p1.exists()
     assert p2.exists()
@@ -315,7 +327,9 @@ def test_evidence_buffer_background_cleanup_lifecycle(temp_storage_dirs):
 def test_uplink_client_auto_resolves_clip_from_evidence_buffer(temp_storage_dirs):
     _, buffer_dir = temp_storage_dirs
     buf = EvidenceBuffer(buffer_dir=buffer_dir)
-    client = RoadSenseUplinkClient(base_url="http://localhost:8000", evidence_buffer=buf)
+    client = RoadSenseUplinkClient(
+        base_url="http://localhost:8000", evidence_buffer=buf
+    )
 
     # If clip is not in buffer, upload_evidence returns pending status cleanly
     res_missing = client.upload_evidence("unknown-nonce")

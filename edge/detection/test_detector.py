@@ -20,9 +20,7 @@ def list_test_images(directory: Path, limit: int = 5) -> list[Path]:
         if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png"}
     ]
     if not image_files:
-        raise FileNotFoundError(
-            f"No JPG/JPEG/PNG frames were found in {directory}."
-        )
+        raise FileNotFoundError(f"No JPG/JPEG/PNG frames were found in {directory}.")
     return image_files[:limit]
 
 
@@ -58,12 +56,18 @@ def main() -> None:
 
         if detections and output_image_path is None:
             output_image_path = OUTPUT_DIR / f"{image_path.stem}_detections.jpg"
-            draw_detections(detector._coerce_frame(str(image_path)), detections, output_path=output_image_path)
+            draw_detections(
+                detector._coerce_frame(str(image_path)),
+                detections,
+                output_path=output_image_path,
+            )
             print(f"Visualization saved to: {output_image_path}")
             print()
 
     if output_image_path is None:
-        print(f"No visualization generated because no target objects were found in the sample frames.")
+        print(
+            "No visualization generated because no target objects were found in the sample frames."
+        )
 
 
 if __name__ == "__main__":

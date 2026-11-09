@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
-from ultralytics import YOLO
 
 import torch
+from ultralytics import YOLO
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_YAML = ROOT / "edge" / "data" / "plate-labeled-v1" / "data.yaml"
 PROJECT_DIR = ROOT / "edge" / "runs"
+
 
 def train():
     torch.set_num_threads(8)
@@ -28,6 +28,7 @@ def train():
     )
     print("Training finished.")
     return results
+
 
 if __name__ == "__main__":
     train()

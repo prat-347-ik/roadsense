@@ -4,7 +4,9 @@ BASE32 = "0123456789bcdefghjkmnpqrstuvwxyz"
 BASE32_MAP = {c: i for i, c in enumerate(BASE32)}
 
 
-def haversine_distance_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+def haversine_distance_meters(
+    lat1: float, lon1: float, lat2: float, lon2: float
+) -> float:
     """Calculate the great-circle distance between two points on the Earth in meters."""
     radius_earth_meters = 6371000.0
 
@@ -29,7 +31,9 @@ def calculate_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> flo
     delta_lambda = math.radians(lon2 - lon1)
 
     y = math.sin(delta_lambda) * math.cos(phi2)
-    x = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(delta_lambda)
+    x = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(
+        delta_lambda
+    )
 
     bearing_rad = math.atan2(y, x)
     bearing_deg = (math.degrees(bearing_rad) + 360.0) % 360.0

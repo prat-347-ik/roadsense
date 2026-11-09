@@ -1,16 +1,17 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Dict, List, Optional, Set, Tuple
 
 from app.core.config import settings
 from app.services.geo import encode_geohash, haversine_distance_meters
 from app.services.progression import ObservationPoint
 
 
-def _is_rejected_wrong_way(status: Optional[str]) -> bool:
+def _is_rejected_wrong_way(status: str | None) -> bool:
     """True for 'rejected' and reason-suffixed values such as 'rejected(parked)'."""
-    return status == "rejected" or (status is not None and status.startswith("rejected"))
+    return status == "rejected" or (
+        status is not None and status.startswith("rejected")
+    )
 
 
 class IncidentClusteringStatus(str, Enum):
@@ -30,8 +31,8 @@ class ObservationCluster:
     centroid_lon: float
     window_start: datetime
     window_end: datetime
-    observations: List[ObservationPoint] = field(default_factory=list)
-    device_ids: Set[str] = field(default_factory=set)
+    observations: list[ObservationPoint] = field(default_factory=list)
+    device_ids: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -47,17 +48,17 @@ class EvidenceRequestTarget:
 class EvidenceTriggerDecision:
     incident_status: IncidentClusteringStatus
     should_request_evidence: bool
-    evidence_requests: List[EvidenceRequestTarget] = field(default_factory=list)
+    evidence_requests: list[EvidenceRequestTarget] = field(default_factory=list)
     reason: str = ""
 
 
 def cluster_observations(
-    observations: List[ObservationPoint],
+    observations: list[ObservationPoint],
     violation_type: str,
     cluster_radius_meters: float | None = None,
     time_window_seconds: float | None = None,
     geohash_precision: int | None = None,
-) -> List[ObservationCluster]:
+) -> list[ObservationCluster]:
     """Group observations agreeing on violation_type, hashed plate_no, spatial proximity, and time window.
 
     Pure function with configurable clustering thresholds.
@@ -68,7 +69,9 @@ def cluster_observations(
     evidence — that policy lives in evaluate_evidence_trigger().
     """
     radius = cluster_radius_meters or settings.CLUSTER_RADIUS_METERS
-    window_sec = time_window_seconds or float(settings.CORROBORATION_TIME_WINDOW_SECONDS)
+    window_sec = time_window_seconds or float(
+        settings.CORROBORATION_TIME_WINDOW_SECONDS
+    )
     precision = geohash_precision or settings.GEOHASH_PRECISION
 
     if not observations:
@@ -79,7 +82,7 @@ def cluster_observations(
 
     # Sort observations chronologically
     sorted_obs = sorted(observations, key=lambda o: _to_utc(o.ts))
-    clusters: List[ObservationCluster] = []
+    clusters: list[ObservationCluster] = []
 
     for obs in sorted_obs:
         assigned = False
@@ -88,7 +91,10 @@ def cluster_observations(
 
         for cluster in clusters:
             # Check violation type and plate match
-            if cluster.violation_type != violation_type or cluster.hashed_plate != obs.hashed_plate:
+            if (
+                cluster.violation_type != violation_type
+                or cluster.hashed_plate != obs.hashed_plate
+            ):
                 continue
 
             # Check time window
@@ -111,7 +117,9 @@ def cluster_observations(
                 n = len(cluster.observations)
                 cluster.centroid_lat = sum(o.lat for o in cluster.observations) / n
                 cluster.centroid_lon = sum(o.lon for o in cluster.observations) / n
-                cluster.geohash = encode_geohash(cluster.centroid_lat, cluster.centroid_lon, precision=precision)
+                cluster.geohash = encode_geohash(
+                    cluster.centroid_lat, cluster.centroid_lon, precision=precision
+                )
 
                 assigned = True
                 break
@@ -153,8 +161,7 @@ def evaluate_evidence_trigger(
     # Another device reporting the same rejected path must not corroborate it.
     if cluster.violation_type == "wrong_side":
         has_rejected = any(
-            _is_rejected_wrong_way(obs.wrong_way_status)
-            for obs in cluster.observations
+            _is_rejected_wrong_way(obs.wrong_way_status) for obs in cluster.observations
         )
         if has_rejected:
             return EvidenceTriggerDecision(
@@ -168,8 +175,7 @@ def evaluate_evidence_trigger(
     # UNCONFIRMED wrong-side observations leave the incident as candidate.
     if cluster.violation_type == "wrong_side":
         valid_obs = [
-            obs for obs in cluster.observations
-            if obs.wrong_way_status == "confirmed"
+            obs for obs in cluster.observations if obs.wrong_way_status == "confirmed"
         ]
     else:
         valid_obs = cluster.observations
@@ -228,7 +234,7 @@ def evaluate_evidence_timeout(
     if incident_status != IncidentClusteringStatus.CORROBORATED.value:
         return IncidentClusteringStatus(incident_status)
 
-    if uploaded_evidence_count >= expected_evidence_count and expected_evidence_count > 0:
+    if uploaded_evidence_count >= expected_evidence_count > 0:
         return IncidentClusteringStatus.CORROBORATED
 
     def _to_utc(dt: datetime) -> datetime:

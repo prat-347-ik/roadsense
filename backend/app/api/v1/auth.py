@@ -1,12 +1,12 @@
 from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_reviewer, get_async_db
+from app.api.deps import get_async_db, get_current_reviewer
 from app.core.security import create_access_token, verify_password
 from app.models.entities import Reviewer
 from app.schemas.observation import ReviewerLoginRequest, TokenResponse
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 

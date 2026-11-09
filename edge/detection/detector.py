@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, TypeAlias
+from typing import Any, TypeAlias
 
 import cv2
 import numpy as np
@@ -30,7 +31,9 @@ class Detection:
 class YOLODetector:
     """Thin wrapper around a pretrained Ultralytics YOLO model."""
 
-    def __init__(self, model_path: str = "yolov8n.pt", confidence_threshold: float = 0.25):
+    def __init__(
+        self, model_path: str = "yolov8n.pt", confidence_threshold: float = 0.25
+    ):
         self.model_path = model_path
         self.confidence_threshold = float(confidence_threshold)
         if self.confidence_threshold < 0.0 or self.confidence_threshold > 1.0:

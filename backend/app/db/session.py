@@ -1,9 +1,9 @@
-from typing import AsyncGenerator
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from app.core.config import settings
-
+from collections.abc import AsyncGenerator
 from urllib.parse import urlparse
+
+from app.core.config import settings
 from app.core.logging_config import logger
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 _engine = None
 _AsyncSessionLocal = None
@@ -16,7 +16,11 @@ def get_engine():
         db_url = settings.DATABASE_URL
 
         if db_backend == "sqlite" or db_url.startswith("sqlite"):
-            sqlite_url = "sqlite+aiosqlite:///roadsense_dev.db" if not db_url.startswith("sqlite") else db_url
+            sqlite_url = (
+                "sqlite+aiosqlite:///roadsense_dev.db"
+                if not db_url.startswith("sqlite")
+                else db_url
+            )
             logger.info("Database backend selected: SQLITE (target: %s)", sqlite_url)
             _engine = create_async_engine(
                 sqlite_url,

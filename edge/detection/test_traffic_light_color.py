@@ -41,7 +41,9 @@ def test_classify_returns_result_metadata() -> None:
 def test_yellow_and_green_are_separated() -> None:
     yellow_patch = np.full((30, 30, 3), (30, 255, 255), dtype=np.uint8)
     green_patch = np.full((30, 30, 3), (0, 255, 0), dtype=np.uint8)
-    assert classify_traffic_light_color(yellow_patch, min_pixel_count=5).color == "yellow"
+    assert (
+        classify_traffic_light_color(yellow_patch, min_pixel_count=5).color == "yellow"
+    )
     assert classify_traffic_light_color(green_patch, min_pixel_count=5).color == "green"
 
 

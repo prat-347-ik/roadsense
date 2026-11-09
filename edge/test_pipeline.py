@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -51,9 +51,7 @@ def test_pipeline_processes_continuous_frames_and_keeps_metrics(
 ) -> None:
     frame = np.zeros((100, 100, 3), dtype=np.uint8)
     frames = [frame.copy() for _ in range(3)]
-    vehicle = FakeDetector(
-        [[Prediction((5, 20, 35, 45), "car")] for _ in frames]
-    )
+    vehicle = FakeDetector([[Prediction((5, 20, 35, 45), "car")] for _ in frames])
     plate = FakeDetector([[] for _ in frames])
     queue = ObservationQueue(tmp_path / "queue.db")
 
@@ -281,9 +279,7 @@ def test_repeated_candidate_is_enqueued_only_once(
     decision = _make_candidate_decision("MH12AB1234")
 
     for _ in range(3):
-        pipeline._emit_candidate(
-            track, decision, frame, (18.5204, 73.8567), 1.0
-        )
+        pipeline._emit_candidate(track, decision, frame, (18.5204, 73.8567), 1.0)
 
     assert queue.get_queue_depth() == 1
     assert pipeline.metrics.candidates == 1

@@ -1,26 +1,31 @@
 from datetime import datetime, timezone
-from typing import Annotated, List
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Annotated
 
 from app.api.deps import get_async_db
 from app.core.logging_config import logger
 from app.models.entities import CandidateIncident, Evidence
 from app.schemas.observation import EvidenceRequestItem, EvidenceUploadResponse
 from app.services.storage import storage_service
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="", tags=["evidence"])
 
 
-@router.get("/evidence-requests", response_model=List[EvidenceRequestItem])
+@router.get("/evidence-requests", response_model=list[EvidenceRequestItem])
 async def get_evidence_requests(
-    device_id: Annotated[str, Query(..., description="Device ID requesting pending evidence collection jobs")],
+    device_id: Annotated[
+        str,
+        Query(..., description="Device ID requesting pending evidence collection jobs"),
+    ],
     db: Annotated[AsyncSession, Depends(get_async_db)],
-) -> List[EvidenceRequestItem]:
+) -> list[EvidenceRequestItem]:
     """Device polls for pending evidence clip collection requests addressed to its device_id."""
     stmt = (
-        select(Evidence, CandidateIncident.violation_type, CandidateIncident.window_start)
+        select(
+            Evidence, CandidateIncident.violation_type, CandidateIncident.window_start
+        )
         .join(CandidateIncident, Evidence.incident_id == CandidateIncident.id)
         .where(
             Evidence.device_id == device_id,
@@ -28,7 +33,7 @@ async def get_evidence_requests(
         )
     )
     result = await db.execute(stmt)
-    items: List[EvidenceRequestItem] = []
+    items: list[EvidenceRequestItem] = []
 
     for ev, violation_type, window_start in result.all():
         items.append(
@@ -82,7 +87,9 @@ async def upload_evidence(
     evidence.uploaded_at = now
 
     # Update parent incident status if appropriate
-    incident_stmt = select(CandidateIncident).where(CandidateIncident.id == evidence.incident_id)
+    incident_stmt = select(CandidateIncident).where(
+        CandidateIncident.id == evidence.incident_id
+    )
     incident_res = await db.execute(incident_stmt)
     incident = incident_res.scalar_one_or_none()
     if incident and incident.status == "candidate":
@@ -152,4 +159,3 @@ async def get_evidence_media(
         status_code=status.HTTP_502_BAD_GATEWAY,
         detail="Evidence retrieval temporarily unavailable",
     )
-

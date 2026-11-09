@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import re
 import logging
+import re
 from typing import Any
+
 import cv2
 import easyocr
 import numpy as np
@@ -102,7 +103,9 @@ class PlateReader:
             return None
 
         try:
-            processed = preprocess_crop(crop, grayscale=grayscale) if preprocess else crop
+            processed = (
+                preprocess_crop(crop, grayscale=grayscale) if preprocess else crop
+            )
             # EasyOCR expects RGB/BGR array
             read_kwargs: dict[str, Any] = {"detail": 1, "paragraph": False}
             if allowlist:

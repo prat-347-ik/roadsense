@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+
 import numpy as np
-import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from edge.ocr.plate_reader import PlateReader, read_plate, normalize_plate_text, preprocess_crop
+from edge.ocr.plate_reader import normalize_plate_text, preprocess_crop, read_plate
 
 
 def test_normalize_plate_text():
@@ -34,6 +34,7 @@ def test_read_plate_empty():
     # Blank black image should return None cleanly without error
     blank = np.zeros((40, 100, 3), dtype=np.uint8)
     assert read_plate(blank) is None
+
 
 def test_preprocess_crop_grayscale():
     small = np.zeros((30, 60, 3), dtype=np.uint8)

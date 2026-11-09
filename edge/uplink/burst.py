@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import logging
-from typing import Any
 import uuid
+from datetime import datetime, timezone
+from typing import Any
 
 from edge.rules.red_light import RedLightCandidateDecision
 from edge.rules.wrong_way import WrongWayCandidateDecision
@@ -20,7 +20,6 @@ DEFAULT_LON = 73.8567
 
 class NoPlateAvailableError(ValueError):
     """Raised when attempting to assemble a burst without a valid license plate."""
-    pass
 
 
 def assemble_burst(
@@ -61,15 +60,21 @@ def assemble_burst(
     # 1. Normalize violation_type
     vtype = str(violation_type).lower().strip()
     if vtype not in ("wrong_side", "red_light"):
-        raise ValueError(f"Invalid violation_type '{violation_type}'; must be 'wrong_side' or 'red_light'")
+        raise ValueError(
+            f"Invalid violation_type '{violation_type}'; must be 'wrong_side' or 'red_light'"
+        )
 
     # 2. Check plate number availability
     cleaned_plate = plate_no.strip().upper() if plate_no else ""
     if not cleaned_plate:
         if allow_skip_without_plate:
-            logger.info("Plate unreadable or below gating threshold. Skipping burst transmission per privacy design.")
+            logger.info(
+                "Plate unreadable or below gating threshold. Skipping burst transmission per privacy design."
+            )
             return None
-        raise NoPlateAvailableError("Cannot assemble burst without valid license plate (schema requires 1-16 chars).")
+        raise NoPlateAvailableError(
+            "Cannot assemble burst without valid license plate (schema requires 1-16 chars)."
+        )
 
     # Bound plate string length to backend schema max_length (16)
     if len(cleaned_plate) > 16:
@@ -128,7 +133,9 @@ def assemble_burst_from_decision(
     else:
         raise TypeError(f"Unsupported decision type: {type(decision)}")
 
-    plate = override_plate or decision.plate_text or (track.plate_text if track else None)
+    plate = (
+        override_plate or decision.plate_text or (track.plate_text if track else None)
+    )
 
     return assemble_burst(
         violation_type=vtype,

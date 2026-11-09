@@ -1,10 +1,10 @@
 import asyncio
 import logging
-from sqlalchemy import select
 
 from app.core.security import get_password_hash
 from app.db.session import get_session_factory
 from app.models.entities import Reviewer
+from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 

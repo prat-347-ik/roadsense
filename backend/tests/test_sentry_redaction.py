@@ -1,7 +1,7 @@
 import logging
-import pytest
-from app.core.sentry import sanitize_data_recursively, sentry_before_send, init_sentry
+
 from app.core.config import settings
+from app.core.sentry import init_sentry, sanitize_data_recursively, sentry_before_send
 
 
 def test_sanitize_data_recursively_raw_plate():
@@ -26,7 +26,10 @@ def test_sanitize_data_recursively_raw_plate():
 
     assert sanitized["plate_no"] == "[REDACTED]"
     assert sanitized["plate"] == "[REDACTED]"
-    assert sanitized["hashed_plate"] == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    assert (
+        sanitized["hashed_plate"]
+        == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    )
     assert sanitized["device_id"] == "cam-01"
     assert sanitized["nested"]["license_plate_no"] == "[REDACTED]"
     assert sanitized["nested"]["vehicle_plate"] == "[REDACTED]"
@@ -131,9 +134,12 @@ def test_init_sentry_noop_when_dsn_unset(monkeypatch):
 
 def test_init_sentry_warning_on_missing_package(monkeypatch, caplog):
     """When SENTRY_DSN is set but sentry_sdk is not importable, log a clear warning."""
-    monkeypatch.setattr(settings, "SENTRY_DSN", "https://examplePublicKey@o0.ingest.sentry.io/0")
-    
+    monkeypatch.setattr(
+        settings, "SENTRY_DSN", "https://examplePublicKey@o0.ingest.sentry.io/0"
+    )
+
     import builtins
+
     real_import = builtins.__import__
 
     def mock_import(name, *args, **kwargs):
@@ -146,4 +152,7 @@ def test_init_sentry_warning_on_missing_package(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING):
         init_sentry()
 
-    assert any("SENTRY_DSN is configured, but sentry-sdk is not installed" in record.message for record in caplog.records)
+    assert any(
+        "SENTRY_DSN is configured, but sentry-sdk is not installed" in record.message
+        for record in caplog.records
+    )

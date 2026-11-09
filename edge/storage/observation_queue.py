@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import json
 import logging
-from pathlib import Path
 import sqlite3
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 from edge.uplink.client import (
@@ -109,26 +108,35 @@ class ObservationQueue:
                 conn.commit()
                 logger.info("Enqueued observation burst (nonce: %s)", nonce)
             except sqlite3.IntegrityError:
-                logger.warning("Observation with nonce '%s' already exists in queue; skipping insert.", nonce)
+                logger.warning(
+                    "Observation with nonce '%s' already exists in queue; skipping insert.",
+                    nonce,
+                )
 
         return nonce
 
     def get_queue_depth(self) -> int:
         """Returns the number of pending observations waiting to be sent."""
         with self._lock, self._get_connection() as conn:
-            cur = conn.execute("SELECT COUNT(*) FROM observations_queue WHERE status = 'pending'")
+            cur = conn.execute(
+                "SELECT COUNT(*) FROM observations_queue WHERE status = 'pending'"
+            )
             return cur.fetchone()[0]
 
     def get_failed_count(self) -> int:
         """Returns the number of permanently failed observations (e.g. 400/422)."""
         with self._lock, self._get_connection() as conn:
-            cur = conn.execute("SELECT COUNT(*) FROM observations_queue WHERE status = 'failed'")
+            cur = conn.execute(
+                "SELECT COUNT(*) FROM observations_queue WHERE status = 'failed'"
+            )
             return cur.fetchone()[0]
 
     def get_sent_count(self) -> int:
         """Returns the number of successfully sent observations."""
         with self._lock, self._get_connection() as conn:
-            cur = conn.execute("SELECT COUNT(*) FROM observations_queue WHERE status = 'sent'")
+            cur = conn.execute(
+                "SELECT COUNT(*) FROM observations_queue WHERE status = 'sent'"
+            )
             return cur.fetchone()[0]
 
     def get_stats(self) -> dict[str, int]:
@@ -270,7 +278,10 @@ class ObservationQueue:
                     response = client.send_observation(payload)
                     # Check if response was handled duplicate
                     if response.get("status") == "duplicate":
-                        logger.info("Nonce '%s' already exists on backend (409); marking sent.", nonce)
+                        logger.info(
+                            "Nonce '%s' already exists on backend (409); marking sent.",
+                            nonce,
+                        )
                         conn.execute(
                             "UPDATE observations_queue SET status = 'sent', last_attempt_at = ?, error_message = 'Duplicate (409)' WHERE id = ?",
                             (now, row_id),
@@ -294,7 +305,10 @@ class ObservationQueue:
                 except UplinkConnectionError as conn_err:
                     # Connection error: leave pending, increment retry count, compute exponential backoff
                     new_retry = retry_count + 1
-                    delay = min(self.base_delay * (self.backoff_factor ** (new_retry - 1)), self.max_delay)
+                    delay = min(
+                        self.base_delay * (self.backoff_factor ** (new_retry - 1)),
+                        self.max_delay,
+                    )
                     next_attempt_at = now + delay
                     logger.warning(
                         "Connection error sending nonce '%s' (retry %d, backoff delay %.1fs): %s",
@@ -315,7 +329,11 @@ class ObservationQueue:
 
                 except (UplinkValidationError, UplinkError) as client_err:
                     # 400 or 422: unprocessable / bad payload, do not retry forever
-                    logger.error("Permanent error for nonce '%s': %s; marking failed.", nonce, client_err)
+                    logger.error(
+                        "Permanent error for nonce '%s': %s; marking failed.",
+                        nonce,
+                        client_err,
+                    )
                     conn.execute(
                         "UPDATE observations_queue SET status = 'failed', last_attempt_at = ?, error_message = ? WHERE id = ?",
                         (now, str(client_err), row_id),
@@ -325,7 +343,10 @@ class ObservationQueue:
                 except Exception as unk_err:
                     # Unexpected runtime error: treat as connection/retryable
                     new_retry = retry_count + 1
-                    delay = min(self.base_delay * (self.backoff_factor ** (new_retry - 1)), self.max_delay)
+                    delay = min(
+                        self.base_delay * (self.backoff_factor ** (new_retry - 1)),
+                        self.max_delay,
+                    )
                     next_attempt_at = now + delay
                     conn.execute(
                         """

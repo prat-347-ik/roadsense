@@ -1,4 +1,3 @@
-from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -8,7 +7,9 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/v1"
 
     # Database & Storage
-    DATABASE_URL: str = "postgresql+asyncpg://roadsense:roadsense@postgres:5432/roadsense"
+    DATABASE_URL: str = (
+        "postgresql+asyncpg://roadsense:roadsense@postgres:5432/roadsense"
+    )
     REDIS_URL: str = "redis://redis:6379/0"
     MINIO_ENDPOINT_URL: str = "http://minio:9000"
     MINIO_ROOT_USER: str = "roadsense-admin"
@@ -28,15 +29,15 @@ class Settings(BaseSettings):
     EVIDENCE_TTL_DAYS: int = 30
 
     # Scheduled sweep intervals (APScheduler)
-    SWEEP_INTERVAL_SECONDS: int = 60          # stale-observation sweep cadence
+    SWEEP_INTERVAL_SECONDS: int = 60  # stale-observation sweep cadence
     EVIDENCE_TTL_CHECK_INTERVAL_SECONDS: int = 3600  # evidence-TTL sweep cadence
 
     # Operational & Development Flags
     USE_SIMULATED_EVIDENCE: bool = False
     AUTO_INIT_DB: bool = False
-    DB_BACKEND: Optional[str] = None
+    DB_BACKEND: str | None = None
 
-    SENTRY_DSN: Optional[str] = None
+    SENTRY_DSN: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -1,5 +1,6 @@
-from ultralytics import YOLO
 from pathlib import Path
+
+from ultralytics import YOLO
 
 # -----------------------------
 # 1. Load YOLO model
@@ -9,9 +10,7 @@ model = YOLO("yolov8n.pt")
 # -----------------------------
 # 2. Frames folder
 # -----------------------------
-FRAMES_DIR = Path(
-    r"C:\Users\Pratik\Project_Repos\datasets\extracted_frames"
-)
+FRAMES_DIR = Path(r"C:\Users\Pratik\Project_Repos\datasets\extracted_frames")
 
 # -----------------------------
 # 3. Classes we care about
@@ -24,8 +23,7 @@ WANTED_CLASSES = {2, 3, 5, 7, 9}
 image_extensions = {".jpg", ".jpeg", ".png", ".webp"}
 
 frames = [
-    path for path in FRAMES_DIR.iterdir()
-    if path.suffix.lower() in image_extensions
+    path for path in FRAMES_DIR.iterdir() if path.suffix.lower() in image_extensions
 ]
 
 print(f"Found {len(frames)} frames.")
@@ -34,21 +32,16 @@ print(f"Found {len(frames)} frames.")
 # 5. Process every frame
 # -----------------------------
 for frame_path in frames:
-
     print(f"\nProcessing: {frame_path.name}")
 
     # Run YOLO
-    results = model(
-    str(frame_path),
-    conf=0.5
-    )
+    results = model(str(frame_path), conf=0.5)
     detections = []
 
     # -----------------------------
     # 6. Process detections
     # -----------------------------
     for box in results[0].boxes:
-
         class_id = int(box.cls)
 
         # Ignore objects we don't care about
@@ -68,7 +61,7 @@ for frame_path in frames:
             "class_id": class_id,
             "class_name": class_name,
             "confidence": confidence,
-            "bbox": [x1, y1, x2, y2]
+            "bbox": [x1, y1, x2, y2],
         }
 
         detections.append(detection)

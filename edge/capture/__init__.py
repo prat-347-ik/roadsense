@@ -6,4 +6,4 @@ from edge.capture.sources import (
     WebcamFrameSource,
 )
 
-__all__ = ["FrameSource", "WebcamFrameSource", "ImageSequenceFrameSource"]
+__all__ = ["FrameSource", "ImageSequenceFrameSource", "WebcamFrameSource"]

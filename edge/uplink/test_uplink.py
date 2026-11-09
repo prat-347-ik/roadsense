@@ -1,6 +1,7 @@
 import uuid
-import pytest
+
 import httpx
+import pytest
 
 from edge.rules.red_light import RedLightCandidateDecision
 from edge.rules.wrong_way import WrongWayCandidateDecision
@@ -10,9 +11,7 @@ from edge.uplink.burst import (
     assemble_burst_from_decision,
 )
 from edge.uplink.client import (
-    DuplicateNonceError,
     RoadSenseUplinkClient,
-    UplinkConnectionError,
     UplinkValidationError,
 )
 from edge.uplink.signing import DeviceSigner
@@ -42,7 +41,10 @@ def test_device_signer_keypair_and_verification(tmp_path):
 
     # Tampered payload fails verification
     tampered_payload = dict(payload, plate_no="MH14CD9999")
-    assert DeviceSigner.verify_signature(tampered_payload, sig, signer.public_key_hex) is False
+    assert (
+        DeviceSigner.verify_signature(tampered_payload, sig, signer.public_key_hex)
+        is False
+    )
 
 
 def test_assemble_burst_valid(tmp_path):
@@ -72,7 +74,10 @@ def test_assemble_burst_valid(tmp_path):
     assert str(parsed_uuid) == burst["event_nonce"]
 
     # Signature must verify against payload
-    assert DeviceSigner.verify_signature(burst, burst["sig"], signer.public_key_hex) is True
+    assert (
+        DeviceSigner.verify_signature(burst, burst["sig"], signer.public_key_hex)
+        is True
+    )
 
 
 def test_assemble_burst_skips_when_no_plate(tmp_path):
@@ -124,6 +129,7 @@ def test_assemble_burst_from_decisions(tmp_path):
 
 def test_client_mock_responses():
     """Test HTTP client behavior on 201, 409, and 422 status codes using MockTransport."""
+
     # 1. Test 201 Created
     def mock_handler_201(request: httpx.Request):
         return httpx.Response(
@@ -140,16 +146,18 @@ def test_client_mock_responses():
     # Test send_observation directly by mocking httpx.Client
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(httpx, "Client", lambda **kwargs: client_201_transport)
-        res = client_201.send_observation({
-            "device_id": "d1",
-            "violation_type": "wrong_side",
-            "plate_no": "MH12AB1234",
-            "lat": 18.5,
-            "lon": 73.8,
-            "timestamp": "2026-09-12T10:00:00Z",
-            "event_nonce": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
-            "sig": "fakesig",
-        })
+        res = client_201.send_observation(
+            {
+                "device_id": "d1",
+                "violation_type": "wrong_side",
+                "plate_no": "MH12AB1234",
+                "lat": 18.5,
+                "lon": 73.8,
+                "timestamp": "2026-09-12T10:00:00Z",
+                "event_nonce": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+                "sig": "fakesig",
+            }
+        )
         assert res["status"] == "candidate"
         assert res["event_nonce"] == "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
 
@@ -164,16 +172,18 @@ def test_client_mock_responses():
     client_409_transport = httpx.Client(transport=httpx.MockTransport(mock_handler_409))
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(httpx, "Client", lambda **kwargs: client_409_transport)
-        res = client_409.send_observation({
-            "device_id": "d1",
-            "violation_type": "wrong_side",
-            "plate_no": "MH12AB1234",
-            "lat": 18.5,
-            "lon": 73.8,
-            "timestamp": "2026-09-12T10:00:00Z",
-            "event_nonce": "duplicate-nonce",
-            "sig": "fakesig",
-        })
+        res = client_409.send_observation(
+            {
+                "device_id": "d1",
+                "violation_type": "wrong_side",
+                "plate_no": "MH12AB1234",
+                "lat": 18.5,
+                "lon": 73.8,
+                "timestamp": "2026-09-12T10:00:00Z",
+                "event_nonce": "duplicate-nonce",
+                "sig": "fakesig",
+            }
+        )
         assert res["status"] == "duplicate"
         assert res["event_nonce"] == "duplicate-nonce"
 

@@ -1,10 +1,13 @@
 from typing import Any
+
 from fastapi import Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 
-async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+async def validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
     """Custom validation error handler.
 
     Guarantees that invalid `plate_no` inputs are NEVER echoed back in error responses.

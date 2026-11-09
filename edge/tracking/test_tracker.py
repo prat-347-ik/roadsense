@@ -1,8 +1,7 @@
 import numpy as np
 import pytest
 
-from edge.ocr.plate_reader import MIN_PLATE_WIDTH_GATING
-from edge.tracking.tracker import Detection, IOUTracker, Track, compute_iou
+from edge.tracking.tracker import Detection, IOUTracker, compute_iou
 
 
 def test_iou_computation():

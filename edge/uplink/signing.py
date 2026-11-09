@@ -7,7 +7,6 @@ from typing import Any
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
-
 # Default key storage path (ignored in .gitignore)
 DEFAULT_KEY_DIR = Path(__file__).resolve().parent / "keys"
 DEFAULT_PRIVATE_KEY_PATH = DEFAULT_KEY_DIR / "device_private_key.pem"
@@ -67,20 +66,26 @@ class DeviceSigner:
         """
         # Canonical representation of fields (excluding existing signature)
         clean_payload = {k: v for k, v in payload.items() if k != "sig"}
-        canonical_bytes = json.dumps(clean_payload, sort_keys=True, default=str).encode("utf-8")
+        canonical_bytes = json.dumps(clean_payload, sort_keys=True, default=str).encode(
+            "utf-8"
+        )
 
         sig_bytes = self._private_key.sign(canonical_bytes)
         return sig_bytes.hex()
 
     @staticmethod
-    def verify_signature(payload: dict[str, Any], sig_hex: str, public_key_hex: str) -> bool:
+    def verify_signature(
+        payload: dict[str, Any], sig_hex: str, public_key_hex: str
+    ) -> bool:
         """Verify an Ed25519 signature given payload, hex signature, and hex public key."""
         try:
             pub_bytes = bytes.fromhex(public_key_hex)
             public_key = ed25519.Ed25519PublicKey.from_public_bytes(pub_bytes)
 
             clean_payload = {k: v for k, v in payload.items() if k != "sig"}
-            canonical_bytes = json.dumps(clean_payload, sort_keys=True, default=str).encode("utf-8")
+            canonical_bytes = json.dumps(
+                clean_payload, sort_keys=True, default=str
+            ).encode("utf-8")
 
             sig_bytes = bytes.fromhex(sig_hex)
             public_key.verify(sig_bytes, canonical_bytes)

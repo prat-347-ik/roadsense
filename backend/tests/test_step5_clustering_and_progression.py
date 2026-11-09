@@ -1,25 +1,20 @@
 import uuid
 from datetime import datetime, timedelta, timezone
-import pytest
 
 from app.core.security import hash_plate
 from app.services.clustering import (
     IncidentClusteringStatus,
-    ObservationCluster,
     cluster_observations,
     evaluate_evidence_timeout,
     evaluate_evidence_trigger,
 )
-from app.services.geo import calculate_bearing, encode_geohash, haversine_distance_meters
 from app.services.progression import (
     ObservationPoint,
     ProgressionStatus,
     RejectionReason,
-    calculate_bearing_difference,
     evaluate_stale_observation,
     evaluate_wrong_way_progression,
 )
-
 
 # ----------------------------------------------------------------------
 # Scenario 1: Corroborated Real Incident (2 & 3+ points)
@@ -66,7 +61,9 @@ def test_scenario_1_corroborated_real_incident():
     obs2.wrong_way_status = "confirmed"
 
     # 2. Cluster observations
-    clusters = cluster_observations([obs1, obs2], violation_type="wrong_side", cluster_radius_meters=150.0)
+    clusters = cluster_observations(
+        [obs1, obs2], violation_type="wrong_side", cluster_radius_meters=150.0
+    )
     assert len(clusters) == 1
     cluster = clusters[0]
     assert len(cluster.observations) == 2
@@ -87,9 +84,30 @@ def test_scenario_1b_consistent_multi_point_progression():
     t0 = datetime(2026, 9, 12, 10, 0, 0, tzinfo=timezone.utc)
 
     # Heading roughly North (0 deg)
-    p1 = ObservationPoint(lat=18.5200, lon=73.8560, ts=t0, device_id="cam-1", event_nonce=str(uuid.uuid4()), hashed_plate=plate_hash)
-    p2 = ObservationPoint(lat=18.5208, lon=73.8560, ts=t0 + timedelta(seconds=10), device_id="cam-2", event_nonce=str(uuid.uuid4()), hashed_plate=plate_hash)
-    p3 = ObservationPoint(lat=18.5216, lon=73.8560, ts=t0 + timedelta(seconds=20), device_id="cam-3", event_nonce=str(uuid.uuid4()), hashed_plate=plate_hash)
+    p1 = ObservationPoint(
+        lat=18.5200,
+        lon=73.8560,
+        ts=t0,
+        device_id="cam-1",
+        event_nonce=str(uuid.uuid4()),
+        hashed_plate=plate_hash,
+    )
+    p2 = ObservationPoint(
+        lat=18.5208,
+        lon=73.8560,
+        ts=t0 + timedelta(seconds=10),
+        device_id="cam-2",
+        event_nonce=str(uuid.uuid4()),
+        hashed_plate=plate_hash,
+    )
+    p3 = ObservationPoint(
+        lat=18.5216,
+        lon=73.8560,
+        ts=t0 + timedelta(seconds=20),
+        device_id="cam-3",
+        event_nonce=str(uuid.uuid4()),
+        hashed_plate=plate_hash,
+    )
 
     result = evaluate_wrong_way_progression(p3, [p1, p2])
     assert result.status == ProgressionStatus.CONFIRMED
@@ -138,7 +156,9 @@ def test_scenario_2_parked_car_false_positive():
         hashed_plate=plate_hash,
     )
 
-    result = evaluate_wrong_way_progression(obs3, [obs1, obs2], parked_threshold_meters=8.0)
+    result = evaluate_wrong_way_progression(
+        obs3, [obs1, obs2], parked_threshold_meters=8.0
+    )
     assert result.status == ProgressionStatus.REJECTED
     assert result.reason == RejectionReason.PARKED
     assert "Stationary target" in result.details
@@ -228,11 +248,15 @@ def test_scenario_3_overtaking_artifact_false_positive():
     )
 
     # 1. At ingestion time (within window): status is UNCONFIRMED
-    ingest_res = evaluate_wrong_way_progression(obs_single, [], now=t0 + timedelta(seconds=1))
+    ingest_res = evaluate_wrong_way_progression(
+        obs_single, [], now=t0 + timedelta(seconds=1)
+    )
     assert ingest_res.status == ProgressionStatus.UNCONFIRMED
 
     # 2. When stale observation check runs after time window expires: REJECTED with OVERTAKING_ARTIFACT
-    stale_res = evaluate_stale_observation(obs_single, time_window_seconds=300.0, now=now_past_window)
+    stale_res = evaluate_stale_observation(
+        obs_single, time_window_seconds=300.0, now=now_past_window
+    )
     assert stale_res.status == ProgressionStatus.REJECTED
     assert stale_res.reason == RejectionReason.OVERTAKING_ARTIFACT
     assert "overtaking artifact" in stale_res.details
@@ -248,16 +272,46 @@ def test_scenario_3b_inconsistent_out_and_back_path_rejected():
     t0 = datetime(2026, 9, 12, 11, 0, 0, tzinfo=timezone.utc)
 
     # Point 1: Start (0, 0)
-    p1 = ObservationPoint(lat=18.5200, lon=73.8560, ts=t0, device_id="cam-1", event_nonce=str(uuid.uuid4()), hashed_plate=plate_hash)
+    p1 = ObservationPoint(
+        lat=18.5200,
+        lon=73.8560,
+        ts=t0,
+        device_id="cam-1",
+        event_nonce=str(uuid.uuid4()),
+        hashed_plate=plate_hash,
+    )
     # Point 2: Moved North ~110m (bearing 0 deg)
-    p2 = ObservationPoint(lat=18.5210, lon=73.8560, ts=t0 + timedelta(seconds=10), device_id="cam-2", event_nonce=str(uuid.uuid4()), hashed_plate=plate_hash)
+    p2 = ObservationPoint(
+        lat=18.5210,
+        lon=73.8560,
+        ts=t0 + timedelta(seconds=10),
+        device_id="cam-2",
+        event_nonce=str(uuid.uuid4()),
+        hashed_plate=plate_hash,
+    )
     # Point 3: Reversed South ~90m back towards start! (bearing 180 deg - 180 deg reversal!)
-    p3 = ObservationPoint(lat=18.5202, lon=73.8560, ts=t0 + timedelta(seconds=20), device_id="cam-3", event_nonce=str(uuid.uuid4()), hashed_plate=plate_hash)
+    p3 = ObservationPoint(
+        lat=18.5202,
+        lon=73.8560,
+        ts=t0 + timedelta(seconds=20),
+        device_id="cam-3",
+        event_nonce=str(uuid.uuid4()),
+        hashed_plate=plate_hash,
+    )
     # Point 4: Moved North again ~140m
-    p4 = ObservationPoint(lat=18.5215, lon=73.8560, ts=t0 + timedelta(seconds=30), device_id="cam-4", event_nonce=str(uuid.uuid4()), hashed_plate=plate_hash)
+    p4 = ObservationPoint(
+        lat=18.5215,
+        lon=73.8560,
+        ts=t0 + timedelta(seconds=30),
+        device_id="cam-4",
+        event_nonce=str(uuid.uuid4()),
+        hashed_plate=plate_hash,
+    )
 
     # Endpoints p1 -> p4 net displacement is ~166m, but segment p2 -> p3 reverses direction
-    result = evaluate_wrong_way_progression(p4, [p1, p2, p3], max_bearing_deviation_deg=60.0)
+    result = evaluate_wrong_way_progression(
+        p4, [p1, p2, p3], max_bearing_deviation_deg=60.0
+    )
 
     assert result.status == ProgressionStatus.REJECTED
     assert result.reason == RejectionReason.INCONSISTENT_TRAJECTORY
@@ -274,13 +328,43 @@ def test_scenario_3d_multi_device_rejected_trajectory_forces_rejected_incident_s
     t0 = datetime(2026, 9, 12, 11, 0, 0, tzinfo=timezone.utc)
 
     # 4 distinct devices reporting the erratic trajectory
-    p1 = ObservationPoint(lat=18.5200, lon=73.8560, ts=t0, device_id="cam-1", event_nonce=str(uuid.uuid4()), hashed_plate=plate_hash)
-    p2 = ObservationPoint(lat=18.5210, lon=73.8560, ts=t0 + timedelta(seconds=10), device_id="cam-2", event_nonce=str(uuid.uuid4()), hashed_plate=plate_hash)
-    p3 = ObservationPoint(lat=18.5202, lon=73.8560, ts=t0 + timedelta(seconds=20), device_id="cam-3", event_nonce=str(uuid.uuid4()), hashed_plate=plate_hash)
-    p4 = ObservationPoint(lat=18.5215, lon=73.8560, ts=t0 + timedelta(seconds=30), device_id="cam-4", event_nonce=str(uuid.uuid4()), hashed_plate=plate_hash)
+    p1 = ObservationPoint(
+        lat=18.5200,
+        lon=73.8560,
+        ts=t0,
+        device_id="cam-1",
+        event_nonce=str(uuid.uuid4()),
+        hashed_plate=plate_hash,
+    )
+    p2 = ObservationPoint(
+        lat=18.5210,
+        lon=73.8560,
+        ts=t0 + timedelta(seconds=10),
+        device_id="cam-2",
+        event_nonce=str(uuid.uuid4()),
+        hashed_plate=plate_hash,
+    )
+    p3 = ObservationPoint(
+        lat=18.5202,
+        lon=73.8560,
+        ts=t0 + timedelta(seconds=20),
+        device_id="cam-3",
+        event_nonce=str(uuid.uuid4()),
+        hashed_plate=plate_hash,
+    )
+    p4 = ObservationPoint(
+        lat=18.5215,
+        lon=73.8560,
+        ts=t0 + timedelta(seconds=30),
+        device_id="cam-4",
+        event_nonce=str(uuid.uuid4()),
+        hashed_plate=plate_hash,
+    )
 
     # 1. Progression evaluates trajectory and rejects it as inconsistent
-    prog_result = evaluate_wrong_way_progression(p4, [p1, p2, p3], max_bearing_deviation_deg=60.0)
+    prog_result = evaluate_wrong_way_progression(
+        p4, [p1, p2, p3], max_bearing_deviation_deg=60.0
+    )
     assert prog_result.status == ProgressionStatus.REJECTED
 
     # Update points with rejection status
@@ -290,14 +374,20 @@ def test_scenario_3d_multi_device_rejected_trajectory_forces_rejected_incident_s
     p4.wrong_way_status = "rejected"
 
     # 2. Cluster observations
-    clusters = cluster_observations([p1, p2, p3, p4], violation_type="wrong_side", cluster_radius_meters=300.0)
+    clusters = cluster_observations(
+        [p1, p2, p3, p4], violation_type="wrong_side", cluster_radius_meters=300.0
+    )
     assert len(clusters) == 1
     cluster = clusters[0]
     assert len(cluster.observations) == 4
     assert len(cluster.device_ids) == 4  # 4 distinct devices!
 
     # 3. Evidence trigger must reject the incident despite 4 devices
-    decision = evaluate_evidence_trigger(cluster, corroboration_threshold_devices=2, corroboration_threshold_observations=2)
+    decision = evaluate_evidence_trigger(
+        cluster,
+        corroboration_threshold_devices=2,
+        corroboration_threshold_observations=2,
+    )
     assert decision.incident_status == IncidentClusteringStatus.REJECTED
     assert decision.should_request_evidence is False
     assert len(decision.evidence_requests) == 0
@@ -309,12 +399,22 @@ def test_unconfirmed_multi_device_cluster_stays_candidate():
     plate_hash = hash_plate("DL05SLOWCORROB")
     t0 = datetime(2026, 9, 12, 15, 0, 0, tzinfo=timezone.utc)
     p1 = ObservationPoint(
-        lat=28.6139, lon=77.2090, ts=t0, device_id="cam-south-gate",
-        event_nonce=str(uuid.uuid4()), hashed_plate=plate_hash, wrong_way_status="unconfirmed",
+        lat=28.6139,
+        lon=77.2090,
+        ts=t0,
+        device_id="cam-south-gate",
+        event_nonce=str(uuid.uuid4()),
+        hashed_plate=plate_hash,
+        wrong_way_status="unconfirmed",
     )
     p2 = ObservationPoint(
-        lat=28.6145, lon=77.2090, ts=t0 + timedelta(seconds=10), device_id="cam-north-gate",
-        event_nonce=str(uuid.uuid4()), hashed_plate=plate_hash, wrong_way_status="unconfirmed",
+        lat=28.6145,
+        lon=77.2090,
+        ts=t0 + timedelta(seconds=10),
+        device_id="cam-north-gate",
+        event_nonce=str(uuid.uuid4()),
+        hashed_plate=plate_hash,
+        wrong_way_status="unconfirmed",
     )
     clusters = cluster_observations([p1, p2], violation_type="wrong_side")
     assert len(clusters) == 1
@@ -334,8 +434,22 @@ def test_scenario_3c_widely_spaced_real_observations_unconfirmed():
     # Spaced 360s apart (exceeds 300s window) with 1800m displacement at 5m/s (18 km/h)
     t1 = t0 + timedelta(seconds=360)
 
-    p1 = ObservationPoint(lat=28.6139, lon=77.2090, ts=t0, device_id="cam-south-gate", event_nonce=str(uuid.uuid4()), hashed_plate=plate_hash)
-    p2 = ObservationPoint(lat=28.6300, lon=77.2090, ts=t1, device_id="cam-north-gate", event_nonce=str(uuid.uuid4()), hashed_plate=plate_hash)
+    p1 = ObservationPoint(
+        lat=28.6139,
+        lon=77.2090,
+        ts=t0,
+        device_id="cam-south-gate",
+        event_nonce=str(uuid.uuid4()),
+        hashed_plate=plate_hash,
+    )
+    p2 = ObservationPoint(
+        lat=28.6300,
+        lon=77.2090,
+        ts=t1,
+        device_id="cam-north-gate",
+        event_nonce=str(uuid.uuid4()),
+        hashed_plate=plate_hash,
+    )
 
     result = evaluate_wrong_way_progression(p2, [p1], time_window_seconds=300.0)
 
@@ -380,7 +494,11 @@ def test_scenario_4_single_never_corroborated_flag():
     cluster = clusters[0]
 
     # 3. Evidence decision remains CANDIDATE with no requests
-    decision = evaluate_evidence_trigger(cluster, corroboration_threshold_devices=2, corroboration_threshold_observations=2)
+    decision = evaluate_evidence_trigger(
+        cluster,
+        corroboration_threshold_devices=2,
+        corroboration_threshold_observations=2,
+    )
     assert decision.incident_status == IncidentClusteringStatus.CANDIDATE
     assert decision.should_request_evidence is False
 

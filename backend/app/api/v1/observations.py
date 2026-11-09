@@ -1,9 +1,5 @@
 from datetime import datetime, timezone
 from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, insert, select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_async_db
 from app.core.logging_config import logger
@@ -26,11 +22,17 @@ from app.services.progression import (
     ProgressionStatus,
     evaluate_wrong_way_progression,
 )
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func, insert, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 router = APIRouter(prefix="/observations", tags=["observations"])
 
 
-@router.post("", response_model=ObservationResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "", response_model=ObservationResponse, status_code=status.HTTP_201_CREATED
+)
 async def create_observation(
     payload: ObservationBurstRequest,
     db: Annotated[AsyncSession, Depends(get_async_db)],
@@ -44,7 +46,9 @@ async def create_observation(
     hashed_plate = hash_plate(payload.plate_no)
 
     # 2. Check event_nonce uniqueness for idempotency (clean 409 error)
-    existing_stmt = select(Observation).where(Observation.event_nonce == payload.event_nonce)
+    existing_stmt = select(Observation).where(
+        Observation.event_nonce == payload.event_nonce
+    )
     existing_res = await db.execute(existing_stmt)
     if existing_res.scalar_one_or_none():
         raise HTTPException(
@@ -88,7 +92,9 @@ async def create_observation(
             ObservationPoint(
                 lat=p.lat,
                 lon=p.lon,
-                ts=p.ts if p.ts.tzinfo is not None else p.ts.replace(tzinfo=timezone.utc),
+                ts=p.ts
+                if p.ts.tzinfo is not None
+                else p.ts.replace(tzinfo=timezone.utc),
                 device_id=p.device_id,
                 event_nonce=p.event_nonce,
                 hashed_plate=p.plate_no,
@@ -100,7 +106,9 @@ async def create_observation(
         new_point = ObservationPoint(
             lat=payload.lat,
             lon=payload.lon,
-            ts=payload.timestamp if payload.timestamp.tzinfo is not None else payload.timestamp.replace(tzinfo=timezone.utc),
+            ts=payload.timestamp
+            if payload.timestamp.tzinfo is not None
+            else payload.timestamp.replace(tzinfo=timezone.utc),
             device_id=payload.device_id,
             event_nonce=payload.event_nonce,
             hashed_plate=hashed_plate,
@@ -110,7 +118,10 @@ async def create_observation(
         wrong_way_status = eval_result.status.value
 
         # If trajectory is confirmed or rejected, update priors so clustering evaluates the whole trajectory consistently
-        if eval_result.status in (ProgressionStatus.CONFIRMED, ProgressionStatus.REJECTED):
+        if eval_result.status in (
+            ProgressionStatus.CONFIRMED,
+            ProgressionStatus.REJECTED,
+        ):
             for p in priors:
                 p.wrong_way_status = eval_result.status.value
 
@@ -128,7 +139,9 @@ async def create_observation(
         location=location_val,
         lat=payload.lat,
         lon=payload.lon,
-        ts=payload.timestamp if payload.timestamp.tzinfo is not None else payload.timestamp.replace(tzinfo=timezone.utc),
+        ts=payload.timestamp
+        if payload.timestamp.tzinfo is not None
+        else payload.timestamp.replace(tzinfo=timezone.utc),
         event_nonce=payload.event_nonce,
         signature=payload.sig,
         wrong_way_status=wrong_way_status,
@@ -157,7 +170,9 @@ async def create_observation(
         for o in all_related_obs
     ]
 
-    clusters = cluster_observations(cluster_points, violation_type=payload.violation_type)
+    clusters = cluster_observations(
+        cluster_points, violation_type=payload.violation_type
+    )
 
     for cluster in clusters:
         # Check if an incident already exists for this cluster
@@ -167,7 +182,9 @@ async def create_observation(
             .where(
                 CandidateIncident.plate_no == hashed_plate,
                 CandidateIncident.violation_type == payload.violation_type,
-                CandidateIncident.status.in_(["candidate", "corroborated", "corroborated_no_evidence"]),
+                CandidateIncident.status.in_(
+                    ["candidate", "corroborated", "corroborated_no_evidence"]
+                ),
             )
         )
         inc_res = await db.execute(inc_stmt)
@@ -175,7 +192,9 @@ async def create_observation(
 
         trigger_decision = evaluate_evidence_trigger(cluster)
 
-        geo_cluster_wkt = f"SRID=4326;POINT({cluster.centroid_lon} {cluster.centroid_lat})"
+        geo_cluster_wkt = (
+            f"SRID=4326;POINT({cluster.centroid_lon} {cluster.centroid_lat})"
+        )
         geo_cluster_val = (
             func.ST_GeogFromText(geo_cluster_wkt)
             if db.bind.dialect.name == "postgresql"
@@ -197,11 +216,18 @@ async def create_observation(
             db.add(incident)
             await db.flush()
         else:
-            incident.window_start = min(_to_utc(incident.window_start), _to_utc(cluster.window_start))
-            incident.window_end = max(_to_utc(incident.window_end), _to_utc(cluster.window_end))
+            incident.window_start = min(
+                _to_utc(incident.window_start), _to_utc(cluster.window_start)
+            )
+            incident.window_end = max(
+                _to_utc(incident.window_end), _to_utc(cluster.window_end)
+            )
             if trigger_decision.incident_status == IncidentClusteringStatus.REJECTED:
                 incident.status = "rejected"
-            elif incident.status == "candidate" and trigger_decision.should_request_evidence:
+            elif (
+                incident.status == "candidate"
+                and trigger_decision.should_request_evidence
+            ):
                 incident.status = trigger_decision.incident_status.value
 
         # Link observation to incident in association table

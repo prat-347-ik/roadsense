@@ -1,13 +1,14 @@
 import logging
 import re
-from typing import Any
 
 
 class PlateRedactionFilter(logging.Filter):
     """Logging filter that ensures raw license plates never leak into log output."""
 
     # Regex to catch explicit mentions like plate_no=XYZ or raw plate formats
-    PLATE_PATTERN = re.compile(r"(?:plate_no['\":\s=]+)(['\"][^'\"]+['\"]|[^\s,}{]+)", re.IGNORECASE)
+    PLATE_PATTERN = re.compile(
+        r"(?:plate_no['\":\s=]+)(['\"][^'\"]+['\"]|[^\s,}{]+)", re.IGNORECASE
+    )
 
     def filter(self, record: logging.LogRecord) -> bool:
         if isinstance(record.msg, str):
@@ -23,7 +24,9 @@ class PlateRedactionFilter(logging.Filter):
                 record.args = sanitized
             elif isinstance(record.args, (list, tuple)):
                 record.args = tuple(
-                    "[REDACTED]" if isinstance(a, str) and len(a) <= 16 and a.isalnum() else a
+                    "[REDACTED]"
+                    if isinstance(a, str) and len(a) <= 16 and a.isalnum()
+                    else a
                     for a in record.args
                 )
         return True

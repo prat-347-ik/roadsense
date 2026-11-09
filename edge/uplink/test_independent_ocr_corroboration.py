@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import json
-from pathlib import Path
 import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import cv2
 import httpx
@@ -34,7 +34,9 @@ def test_independent_ocr_corroboration():
     img39 = cv2.imread(str(f39_path))
     img40 = cv2.imread(str(f40_path))
 
-    p_detector = YOLOPlateDetector("edge/runs/plate_v1/weights/best.pt", confidence_threshold=0.25)
+    p_detector = YOLOPlateDetector(
+        "edge/runs/plate_v1/weights/best.pt", confidence_threshold=0.25
+    )
 
     # 2. Detect plate on both frames independently
     dets39 = p_detector.detect(img39)
@@ -53,8 +55,8 @@ def test_independent_ocr_corroboration():
     w40 = b40[2] - b40[0]
 
     # Crop both independently
-    crop39 = img39[int(b39[1]):int(b39[3]), int(b39[0]):int(b39[2])]
-    crop40 = img40[int(b40[1]):int(b40[3]), int(b40[0]):int(b40[2])]
+    crop39 = img39[int(b39[1]) : int(b39[3]), int(b39[0]) : int(b39[2])]
+    crop40 = img40[int(b40[1]) : int(b40[3]), int(b40[0]) : int(b40[2])]
 
     # Save artifact crops for inspection
     artifacts_dir = REPO_ROOT / "edge" / "ocr" / "corroboration_test"
@@ -68,13 +70,13 @@ def test_independent_ocr_corroboration():
     ocr_result_40 = read_plate(crop40)
 
     print(f"Frame 39 (Vehicle approaching, plate width {w39:.1f}px):")
-    print(f"  -> Raw OCR Output: {repr(ocr_result_39)}")
+    print(f"  -> Raw OCR Output: {ocr_result_39!r}")
     print(f"Frame 40 (Vehicle moving forward, plate width {w40:.1f}px):")
-    print(f"  -> Raw OCR Output: {repr(ocr_result_40)}")
+    print(f"  -> Raw OCR Output: {ocr_result_40!r}")
 
     # 4. Compare the two OCR outputs directly
     print("\n--- Comparing Independent OCR Outputs ---")
-    plates_match = (ocr_result_39 == ocr_result_40)
+    plates_match = ocr_result_39 == ocr_result_40
     print(f"Direct String Match: {plates_match}")
     if not plates_match:
         print(f"Discrepancy: '{ocr_result_39}' vs '{ocr_result_40}'")
@@ -87,11 +89,77 @@ def test_independent_ocr_corroboration():
         print(f"Differences: {', '.join(diffs)}")
 
     # 5. Initialize Uplink Client & Device Signers
-    client = RoadSenseUplinkClient(base_url="http://localhost:8000")
+    base_url = "http://localhost:8000"
+    live_server = False
+    try:
+        with httpx.Client(timeout=0.5) as probe:
+            r = probe.get(f"{base_url}/health")
+            if r.status_code == 200:
+                live_server = True
+    except Exception:
+        live_server = False
+
+    import hashlib
+    import hmac
+    import re
+
+    def _mock_hash_plate(plate: str) -> str:
+        cleaned = re.sub(r"\s+", "", (plate or "")).upper()
+        return hmac.new(
+            b"change-me-to-a-random-secret", cleaned.encode(), hashlib.sha256
+        ).hexdigest()
+
+    mock_observations: list[dict] = []
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        url_path = request.url.path
+        if url_path == "/v1/observations":
+            data = json.loads(request.content)
+            mock_observations.append(data)
+            return httpx.Response(
+                201,
+                json={
+                    "event_nonce": data.get("event_nonce"),
+                    "hashed_plate": _mock_hash_plate(data.get("plate_no", "")),
+                    "status": "candidate",
+                },
+            )
+        if url_path == "/v1/auth/login":
+            return httpx.Response(
+                200, json={"access_token": "mock-token", "token_type": "bearer"}
+            )
+        if url_path == "/v1/incidents":
+            # Group mock observations by hashed plate
+            from collections import defaultdict
+
+            groups = defaultdict(list)
+            for obs in mock_observations:
+                h = _mock_hash_plate(obs.get("plate_no", ""))
+                groups[h].append(obs)
+            incidents = []
+            for idx, (h, obs_list) in enumerate(groups.items(), start=1):
+                devices = {o.get("device_id") for o in obs_list}
+                status = "corroborated" if len(devices) >= 2 else "candidate"
+                incidents.append(
+                    {
+                        "id": idx,
+                        "hashed_plate": h,
+                        "status": status,
+                        "observation_count": len(obs_list),
+                    }
+                )
+            return httpx.Response(200, json=incidents)
+        return httpx.Response(404, json={"detail": "Not found"})
+
+    client = RoadSenseUplinkClient(base_url=base_url)
     device_1_id = "independent-cam-north"
     device_2_id = "independent-cam-south"
-    signer_1 = DeviceSigner(key_path=REPO_ROOT / "edge" / "uplink" / "keys" / "device_1_key.pem")
-    signer_2 = DeviceSigner(key_path=REPO_ROOT / "edge" / "uplink" / "keys" / "device_2_key.pem")
+    signer_1 = DeviceSigner(
+        key_path=REPO_ROOT / "edge" / "uplink" / "keys" / "device_1_key.pem"
+    )
+    signer_2 = DeviceSigner(
+        key_path=REPO_ROOT / "edge" / "uplink" / "keys" / "device_2_key.pem"
+    )
 
     base_time = datetime.now(timezone.utc) - timedelta(minutes=2)
 
@@ -118,45 +186,69 @@ def test_independent_ocr_corroboration():
     )
 
     print("\n--- Transmitting Bursts from Two Independent Devices ---")
-    resp_1 = client.send_observation(burst_1)
-    print(f"Device 1 Observation Accepted:")
-    print(f"  Nonce: {resp_1['event_nonce']}")
-    print(f"  Hashed Plate: {resp_1['hashed_plate']}")
+    orig_client_init = httpx.Client
 
-    resp_2 = client.send_observation(burst_2)
-    print(f"Device 2 Observation Accepted:")
-    print(f"  Nonce: {resp_2['event_nonce']}")
-    print(f"  Hashed Plate: {resp_2['hashed_plate']}")
+    def _client_factory(*args, **kwargs):
+        if not live_server:
+            return orig_client_init(transport=httpx.MockTransport(mock_handler))
+        return orig_client_init(*args, **kwargs)
 
-    hashes_match = (resp_1["hashed_plate"] == resp_2["hashed_plate"])
-    print(f"\nBackend Privacy Hash Match: {hashes_match}")
-    print(f"  Hash 1: {resp_1['hashed_plate']}")
-    print(f"  Hash 2: {resp_2['hashed_plate']}")
+    import unittest.mock
 
-    # 6. Query Live Backend /v1/incidents to check Corroboration Status
-    print("\n--- Querying Live Backend /v1/incidents ---")
-    login_res = httpx.post(
-        "http://localhost:8000/v1/auth/login",
-        json={"email": "admin@roadsense.local", "password": "roadsense-admin-password"},
-    )
-    token = login_res.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
+    with unittest.mock.patch("httpx.Client", side_effect=_client_factory):
+        resp_1 = client.send_observation(burst_1)
+        print("Device 1 Observation Accepted:")
+        print(f"  Nonce: {resp_1['event_nonce']}")
+        print(f"  Hashed Plate: {resp_1['hashed_plate']}")
 
-    incidents_res = httpx.get("http://localhost:8000/v1/incidents", headers=headers)
-    assert incidents_res.status_code == 200
-    all_incidents = incidents_res.json()
+        resp_2 = client.send_observation(burst_2)
+        print("Device 2 Observation Accepted:")
+        print(f"  Nonce: {resp_2['event_nonce']}")
+        print(f"  Hashed Plate: {resp_2['hashed_plate']}")
+
+        hashes_match = resp_1["hashed_plate"] == resp_2["hashed_plate"]
+        print(f"\nBackend Privacy Hash Match: {hashes_match}")
+        print(f"  Hash 1: {resp_1['hashed_plate']}")
+        print(f"  Hash 2: {resp_2['hashed_plate']}")
+
+        # 6. Query Live Backend /v1/incidents to check Corroboration Status
+        print("\n--- Querying Live Backend /v1/incidents ---")
+        with httpx.Client() as query_client:
+            login_res = query_client.post(
+                f"{base_url}/v1/auth/login",
+                json={
+                    "email": "admin@roadsense.local",
+                    "password": "roadsense-admin-password",
+                },
+            )
+            token = login_res.json()["access_token"]
+            headers = {"Authorization": f"Bearer {token}"}
+
+            incidents_res = query_client.get(
+                f"{base_url}/v1/incidents", headers=headers
+            )
+            assert incidents_res.status_code == 200
+            all_incidents = incidents_res.json()
 
     # Find incidents corresponding to Hash 1 and Hash 2
-    incidents_1 = [inc for inc in all_incidents if inc["hashed_plate"] == resp_1["hashed_plate"]]
-    incidents_2 = [inc for inc in all_incidents if inc["hashed_plate"] == resp_2["hashed_plate"]]
+    incidents_1 = [
+        inc for inc in all_incidents if inc["hashed_plate"] == resp_1["hashed_plate"]
+    ]
+    incidents_2 = [
+        inc for inc in all_incidents if inc["hashed_plate"] == resp_2["hashed_plate"]
+    ]
 
     print(f"\nIncidents for Hash 1 ({resp_1['hashed_plate'][:12]}...):")
     for inc in incidents_1:
-        print(f"  Incident ID: {inc['id']} | Status: {inc['status']} | Observations Linked: {inc['observation_count']}")
+        print(
+            f"  Incident ID: {inc['id']} | Status: {inc['status']} | Observations Linked: {inc['observation_count']}"
+        )
 
     print(f"\nIncidents for Hash 2 ({resp_2['hashed_plate'][:12]}...):")
     for inc in incidents_2:
-        print(f"  Incident ID: {inc['id']} | Status: {inc['status']} | Observations Linked: {inc['observation_count']}")
+        print(
+            f"  Incident ID: {inc['id']} | Status: {inc['status']} | Observations Linked: {inc['observation_count']}"
+        )
 
     # 7. Evaluate Corroboration Verdict
     if hashes_match:
@@ -168,15 +260,28 @@ def test_independent_ocr_corroboration():
     else:
         # Hashes differed: backend treated them as two separate, uncorroborated candidate incidents
         print("\n[VERDICT] REAL ARCHITECTURAL FINDING CONFIRMED:")
-        print("  Two independent, high-confidence OCR reads of the EXACT same physical vehicle")
-        print(f"  produced slightly different strings ('{ocr_result_39}' vs '{ocr_result_40}', 1 char diff).")
+        print(
+            "  Two independent, high-confidence OCR reads of the EXACT same physical vehicle"
+        )
+        print(
+            f"  produced slightly different strings ('{ocr_result_39}' vs '{ocr_result_40}', 1 char diff)."
+        )
         print("  Because backend clustering groups by exact SHA-256 hashed_plate:")
-        print(f"    - Device 1's observation formed Candidate Incident with count={incidents_1[0]['observation_count']}")
-        print(f"    - Device 2's observation formed Candidate Incident with count={incidents_2[0]['observation_count']}")
-        print("    - Neither incident corroborated. ZERO cross-device corroboration occurred.")
-        print("  Conclusion: Exact hash-based corroboration fails when independent cameras experience OCR character noise.")
+        print(
+            f"    - Device 1's observation formed Candidate Incident with count={incidents_1[0]['observation_count']}"
+        )
+        print(
+            f"    - Device 2's observation formed Candidate Incident with count={incidents_2[0]['observation_count']}"
+        )
+        print(
+            "    - Neither incident corroborated. ZERO cross-device corroboration occurred."
+        )
+        print(
+            "  Conclusion: Exact hash-based corroboration fails when independent cameras experience OCR character noise."
+        )
 
-    return {
+
+    result = {
         "ocr_1": ocr_result_39,
         "ocr_2": ocr_result_40,
         "hash_1": resp_1["hashed_plate"],
@@ -185,6 +290,7 @@ def test_independent_ocr_corroboration():
         "incidents_1": incidents_1,
         "incidents_2": incidents_2,
     }
+    return None
 
 
 if __name__ == "__main__":

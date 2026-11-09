@@ -1,10 +1,9 @@
-import os
 import uuid
-import pytest
-from pydantic import ValidationError
 
+import pytest
 from app.core.security import hash_plate, normalize_plate, verify_signature
 from app.schemas.observation import ObservationBurstRequest
+from pydantic import ValidationError
 
 
 def test_normalize_plate():

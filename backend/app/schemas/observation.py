@@ -26,16 +26,37 @@ class ObservationBurstRequest(BaseModel):
     upon receipt.
     """
 
-    device_id: str = Field(..., min_length=1, max_length=128, description="Unique ID of reporting edge device")
+    device_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=128,
+        description="Unique ID of reporting edge device",
+    )
     violation_type: Literal["wrong_side", "red_light"] = Field(
         ..., description="Detected violation category: wrong_side or red_light"
     )
-    plate_no: str = Field(..., min_length=1, max_length=16, description="Raw license plate text observed at the scene")
-    lat: float = Field(..., ge=-90.0, le=90.0, description="Latitude in decimal degrees")
-    lon: float = Field(..., ge=-180.0, le=180.0, description="Longitude in decimal degrees")
-    timestamp: datetime = Field(..., description="Observation capture time in ISO8601 format")
-    event_nonce: str = Field(..., description="Unique UUID nonce for the burst event to guarantee idempotency")
-    sig: str = Field(..., min_length=1, description="Cryptographic signature of the burst payload")
+    plate_no: str = Field(
+        ...,
+        min_length=1,
+        max_length=16,
+        description="Raw license plate text observed at the scene",
+    )
+    lat: float = Field(
+        ..., ge=-90.0, le=90.0, description="Latitude in decimal degrees"
+    )
+    lon: float = Field(
+        ..., ge=-180.0, le=180.0, description="Longitude in decimal degrees"
+    )
+    timestamp: datetime = Field(
+        ..., description="Observation capture time in ISO8601 format"
+    )
+    event_nonce: str = Field(
+        ...,
+        description="Unique UUID nonce for the burst event to guarantee idempotency",
+    )
+    sig: str = Field(
+        ..., min_length=1, description="Cryptographic signature of the burst payload"
+    )
 
     @field_validator("event_nonce")
     @classmethod
@@ -56,7 +77,7 @@ class ObservationBurstRequest(BaseModel):
                 "lon": 73.8567,
                 "timestamp": "2026-09-12T10:30:00Z",
                 "event_nonce": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
-                "sig": "MEQCIFq9Q..."
+                "sig": "MEQCIFq9Q...",
             }
         }
     }

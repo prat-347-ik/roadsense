@@ -65,7 +65,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -301,12 +301,20 @@ def scenario_1_corroborated_real_incident(
     hashed = r1.get("hashed_plate")
     same_hash = hashed == r2.get("hashed_plate") and hashed is not None
 
-    result.notes.append(f"Burst 1 HTTP {r1.get('_http_status')}: {r1.get('status', r1.get('detail', ''))}")
-    result.notes.append(f"Burst 2 HTTP {r2.get('_http_status')}: {r2.get('status', r2.get('detail', ''))}")
+    result.notes.append(
+        f"Burst 1 HTTP {r1.get('_http_status')}: {r1.get('status', r1.get('detail', ''))}"
+    )
+    result.notes.append(
+        f"Burst 2 HTTP {r2.get('_http_status')}: {r2.get('status', r2.get('detail', ''))}"
+    )
     result.notes.append(f"Same hashed_plate: {same_hash}")
 
     # Incident-level assertion
-    incident = _find_incident_for_plate(client, base_url, token, hashed, "wrong_side") if hashed else None
+    incident = (
+        _find_incident_for_plate(client, base_url, token, hashed, "wrong_side")
+        if hashed
+        else None
+    )
     inc_status = incident.get("status") if incident else None
     result.notes.append(f"Incident status (GET /v1/incidents): {inc_status}")
 
@@ -332,8 +340,12 @@ def scenario_2_parked_car_false_positive(
     cam = "cam-parking-syn-01"
     bursts = [
         _burst(cam, "wrong_side", plate, 28.6139, 77.2090, t0),
-        _burst(cam, "wrong_side", plate, 28.613905, 77.209005, t0 + timedelta(seconds=15)),
-        _burst(cam, "wrong_side", plate, 28.613902, 77.209001, t0 + timedelta(seconds=45)),
+        _burst(
+            cam, "wrong_side", plate, 28.613905, 77.209005, t0 + timedelta(seconds=15)
+        ),
+        _burst(
+            cam, "wrong_side", plate, 28.613902, 77.209001, t0 + timedelta(seconds=45)
+        ),
     ]
     responses = [_post_burst(client, base_url, b) for b in bursts]
     result.requests_sent = bursts
@@ -343,16 +355,22 @@ def scenario_2_parked_car_false_positive(
     hashed = responses[0].get("hashed_plate")
     for i, r in enumerate(responses):
         result.notes.append(
-            f"Burst {i+1} HTTP {r.get('_http_status')}: {r.get('status', r.get('detail', ''))}"
+            f"Burst {i + 1} HTTP {r.get('_http_status')}: {r.get('status', r.get('detail', ''))}"
         )
 
-    incident = _find_incident_for_plate(client, base_url, token, hashed, "wrong_side") if hashed else None
+    incident = (
+        _find_incident_for_plate(client, base_url, token, hashed, "wrong_side")
+        if hashed
+        else None
+    )
     inc_status = incident.get("status") if incident else None
     result.notes.append(f"Incident status (GET /v1/incidents): {inc_status}")
 
     # Parked car: rejected by progression filter → incident status is rejected
     result.passed = all_201 and inc_status == "rejected"
-    result.notes.append("PASS" if result.passed else f"FAIL -- expected rejected, got {inc_status}")
+    result.notes.append(
+        "PASS" if result.passed else f"FAIL -- expected rejected, got {inc_status}"
+    )
     return result
 
 
@@ -376,13 +394,19 @@ def scenario_3_overtaking_artifact(
 
     ok1 = r1.get("_http_status") == 201
     hashed = r1.get("hashed_plate")
-    result.notes.append(f"Burst HTTP {r1.get('_http_status')}: {r1.get('status', r1.get('detail', ''))}")
+    result.notes.append(
+        f"Burst HTTP {r1.get('_http_status')}: {r1.get('status', r1.get('detail', ''))}"
+    )
 
     # Check incident status before sweep (should be candidate)
     incident_before = (
-        _find_incident_for_plate(client, base_url, token, hashed, "wrong_side") if hashed else None
+        _find_incident_for_plate(client, base_url, token, hashed, "wrong_side")
+        if hashed
+        else None
     )
-    result.notes.append(f"Before sweep: incident status = {incident_before.get('status') if incident_before else None}")
+    result.notes.append(
+        f"Before sweep: incident status = {incident_before.get('status') if incident_before else None}"
+    )
 
     # Trigger sweep with time_window_seconds=0 to force immediate rejection
     sweep_result = _trigger_stale_sweep(client, base_url, time_window_seconds=0.0)
@@ -390,14 +414,18 @@ def scenario_3_overtaking_artifact(
 
     # Re-fetch incident — should now be rejected
     incident_after = (
-        _find_incident_for_plate(client, base_url, token, hashed, "wrong_side") if hashed else None
+        _find_incident_for_plate(client, base_url, token, hashed, "wrong_side")
+        if hashed
+        else None
     )
     inc_status = incident_after.get("status") if incident_after else None
     result.notes.append(f"After sweep: incident status = {inc_status}")
 
     result.passed = ok1 and inc_status == "rejected"
     result.notes.append(
-        "PASS" if result.passed else "FAIL -- expected incident status 'rejected' after sweep"
+        "PASS"
+        if result.passed
+        else "FAIL -- expected incident status 'rejected' after sweep"
     )
     return result
 
@@ -416,8 +444,22 @@ def scenario_4_inconsistent_trajectory(
     t0 = _now()
     bursts = [
         _burst("cam-1-syn", "wrong_side", plate, 18.5200, 73.8560, t0),
-        _burst("cam-2-syn", "wrong_side", plate, 18.5210, 73.8560, t0 + timedelta(seconds=10)),
-        _burst("cam-3-syn", "wrong_side", plate, 18.5202, 73.8560, t0 + timedelta(seconds=20)),
+        _burst(
+            "cam-2-syn",
+            "wrong_side",
+            plate,
+            18.5210,
+            73.8560,
+            t0 + timedelta(seconds=10),
+        ),
+        _burst(
+            "cam-3-syn",
+            "wrong_side",
+            plate,
+            18.5202,
+            73.8560,
+            t0 + timedelta(seconds=20),
+        ),
     ]
     responses = [_post_burst(client, base_url, b) for b in bursts]
     result.requests_sent = bursts
@@ -427,10 +469,14 @@ def scenario_4_inconsistent_trajectory(
     hashed = responses[0].get("hashed_plate")
     for i, r in enumerate(responses):
         result.notes.append(
-            f"Burst {i+1} HTTP {r.get('_http_status')}: {r.get('status', r.get('detail', ''))}"
+            f"Burst {i + 1} HTTP {r.get('_http_status')}: {r.get('status', r.get('detail', ''))}"
         )
 
-    incident = _find_incident_for_plate(client, base_url, token, hashed, "wrong_side") if hashed else None
+    incident = (
+        _find_incident_for_plate(client, base_url, token, hashed, "wrong_side")
+        if hashed
+        else None
+    )
     inc_status = incident.get("status") if incident else None
     result.notes.append(f"Incident status (GET /v1/incidents): {inc_status}")
 
@@ -470,12 +516,20 @@ def scenario_5_red_light_violation(
     hashed = r1.get("hashed_plate")
     same_hash = hashed == r2.get("hashed_plate") and hashed is not None
 
-    result.notes.append(f"Burst 1 HTTP {r1.get('_http_status')}: {r1.get('status', r1.get('detail', ''))}")
-    result.notes.append(f"Burst 2 HTTP {r2.get('_http_status')}: {r2.get('status', r2.get('detail', ''))}")
+    result.notes.append(
+        f"Burst 1 HTTP {r1.get('_http_status')}: {r1.get('status', r1.get('detail', ''))}"
+    )
+    result.notes.append(
+        f"Burst 2 HTTP {r2.get('_http_status')}: {r2.get('status', r2.get('detail', ''))}"
+    )
     result.notes.append(f"Same hashed_plate: {same_hash}")
     result.notes.append("red_light — no wrong_way progression filter.")
 
-    incident = _find_incident_for_plate(client, base_url, token, hashed, "red_light") if hashed else None
+    incident = (
+        _find_incident_for_plate(client, base_url, token, hashed, "red_light")
+        if hashed
+        else None
+    )
     inc_status = incident.get("status") if incident else None
     result.notes.append(f"Incident status (GET /v1/incidents): {inc_status}")
 
@@ -512,11 +566,19 @@ def scenario_6_stale_span_unconfirmed(
     hashed = r1.get("hashed_plate")
     same_hash = hashed == r2.get("hashed_plate") and hashed is not None
 
-    result.notes.append(f"Burst 1 HTTP {r1.get('_http_status')}: {r1.get('status', r1.get('detail', ''))}")
-    result.notes.append(f"Burst 2 HTTP {r2.get('_http_status')}: {r2.get('status', r2.get('detail', ''))}")
+    result.notes.append(
+        f"Burst 1 HTTP {r1.get('_http_status')}: {r1.get('status', r1.get('detail', ''))}"
+    )
+    result.notes.append(
+        f"Burst 2 HTTP {r2.get('_http_status')}: {r2.get('status', r2.get('detail', ''))}"
+    )
     result.notes.append(f"Same hashed_plate: {same_hash}")
 
-    incident = _find_incident_for_plate(client, base_url, token, hashed, "wrong_side") if hashed else None
+    incident = (
+        _find_incident_for_plate(client, base_url, token, hashed, "wrong_side")
+        if hashed
+        else None
+    )
     inc_status = incident.get("status") if incident else None
     result.notes.append(f"Incident status (GET /v1/incidents): {inc_status}")
     result.notes.append(
@@ -578,8 +640,12 @@ def scenario_7_degraded_gps_burst(
     result.notes.append(
         f"Jittered coords: cam1=({lat1:.6f},{lon1:.6f}) cam2=({lat2:.6f},{lon2:.6f})"
     )
-    result.notes.append(f"Burst 1 HTTP {r1.get('_http_status')}: {r1.get('status', r1.get('detail', ''))}")
-    result.notes.append(f"Burst 2 HTTP {r2.get('_http_status')}: {r2.get('status', r2.get('detail', ''))}")
+    result.notes.append(
+        f"Burst 1 HTTP {r1.get('_http_status')}: {r1.get('status', r1.get('detail', ''))}"
+    )
+    result.notes.append(
+        f"Burst 2 HTTP {r2.get('_http_status')}: {r2.get('status', r2.get('detail', ''))}"
+    )
 
     # Count distinct incidents for this plate
     if hashed:
@@ -598,9 +664,16 @@ def scenario_7_degraded_gps_burst(
     )
     result.notes.append(f"Incident status: {inc_status}")
 
-    result.passed = ok1 and ok2 and same_hash and incident_count == 1 and inc_status == "corroborated"
+    result.passed = (
+        ok1
+        and ok2
+        and same_hash
+        and incident_count == 1
+        and inc_status == "corroborated"
+    )
     result.notes.append(
-        "PASS" if result.passed
+        "PASS"
+        if result.passed
         else f"FAIL -- expected 1 corroborated incident, got {incident_count} with status {inc_status}"
     )
     return result
@@ -635,7 +708,11 @@ def scenario_8_never_corroborated_flag(
     )
     result.notes.append("No sweep triggered — incident should remain candidate.")
 
-    incident = _find_incident_for_plate(client, base_url, token, hashed, "wrong_side") if hashed else None
+    incident = (
+        _find_incident_for_plate(client, base_url, token, hashed, "wrong_side")
+        if hashed
+        else None
+    )
     inc_status = incident.get("status") if incident else None
     result.notes.append(f"Incident status (GET /v1/incidents): {inc_status}")
 
@@ -681,17 +758,25 @@ def scenario_9_evidence_ttl_exhaustion(
     ok2 = r2.get("_http_status") == 201
     hashed = r1.get("hashed_plate")
 
-    result.notes.append(f"Burst 1 HTTP {r1.get('_http_status')}: {r1.get('status', r1.get('detail', ''))}")
-    result.notes.append(f"Burst 2 HTTP {r2.get('_http_status')}: {r2.get('status', r2.get('detail', ''))}")
+    result.notes.append(
+        f"Burst 1 HTTP {r1.get('_http_status')}: {r1.get('status', r1.get('detail', ''))}"
+    )
+    result.notes.append(
+        f"Burst 2 HTTP {r2.get('_http_status')}: {r2.get('status', r2.get('detail', ''))}"
+    )
 
     incident_before = (
-        _find_incident_for_plate(client, base_url, token, hashed, "wrong_side") if hashed else None
+        _find_incident_for_plate(client, base_url, token, hashed, "wrong_side")
+        if hashed
+        else None
     )
     inc_status_before = incident_before.get("status") if incident_before else None
     result.notes.append(f"Before TTL sweep: incident status = {inc_status_before}")
 
     if inc_status_before != "corroborated":
-        result.notes.append("FAIL -- incident not corroborated before TTL sweep; cannot test TTL exhaustion.")
+        result.notes.append(
+            "FAIL -- incident not corroborated before TTL sweep; cannot test TTL exhaustion."
+        )
         result.passed = False
         return result
 
@@ -702,14 +787,17 @@ def scenario_9_evidence_ttl_exhaustion(
 
     # Re-fetch incident
     incident_after = (
-        _find_incident_for_plate(client, base_url, token, hashed, "wrong_side") if hashed else None
+        _find_incident_for_plate(client, base_url, token, hashed, "wrong_side")
+        if hashed
+        else None
     )
     inc_status_after = incident_after.get("status") if incident_after else None
     result.notes.append(f"After TTL sweep: incident status = {inc_status_after}")
 
     result.passed = ok1 and ok2 and inc_status_after == "corroborated_no_evidence"
     result.notes.append(
-        "PASS" if result.passed
+        "PASS"
+        if result.passed
         else "FAIL -- expected corroborated_no_evidence after TTL sweep"
     )
     return result
@@ -756,26 +844,31 @@ def main() -> None:
         description="Send synthetic observation bursts to RoadSense API and report results."
     )
     parser.add_argument(
-        "--base-url", default=BASE_URL_DEFAULT,
+        "--base-url",
+        default=BASE_URL_DEFAULT,
         help=f"API base URL (default: {BASE_URL_DEFAULT})",
     )
     parser.add_argument(
-        "--scenario", type=int, default=0,
+        "--scenario",
+        type=int,
+        default=0,
         help="Run a single scenario by number (1-9). Default 0 = all.",
     )
     parser.add_argument(
-        "--reviewer-email", default=DEFAULT_REVIEWER_EMAIL,
+        "--reviewer-email",
+        default=DEFAULT_REVIEWER_EMAIL,
         help="Reviewer email for JWT login (for incident-level assertions).",
     )
     parser.add_argument(
-        "--reviewer-password", default=DEFAULT_REVIEWER_PASSWORD,
+        "--reviewer-password",
+        default=DEFAULT_REVIEWER_PASSWORD,
         help="Reviewer password for JWT login.",
     )
     args = parser.parse_args()
 
     base_url = args.base_url.rstrip("/")
 
-    print(f"\nRoadSense Synthetic Burst Generator — 9 scenarios")
+    print("\nRoadSense Synthetic Burst Generator — 9 scenarios")
     print(f"Target: {base_url}{OBS_ENDPOINT}")
     print(f"Time:   {_now().isoformat()}")
     _print_separator()

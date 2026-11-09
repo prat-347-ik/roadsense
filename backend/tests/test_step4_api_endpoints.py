@@ -1,12 +1,9 @@
 import io
 import uuid
 from datetime import datetime, timedelta, timezone
+
 import pytest
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
-
 from app.api.deps import get_async_db
 from app.core.logging_config import PlateRedactionFilter
 from app.core.security import (
@@ -18,8 +15,17 @@ from app.core.security import (
 )
 from app.core.sentry import sentry_before_send
 from app.main import app
-from app.models.entities import Base, CandidateIncident, Device, Evidence, Observation, Reviewer
-
+from app.models.entities import (
+    Base,
+    CandidateIncident,
+    Device,
+    Evidence,
+    Observation,
+    Reviewer,
+)
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
 
 # In-memory SQLite with StaticPool so all async sessions share the exact same database
 test_engine = create_async_engine(
@@ -86,7 +92,9 @@ def auth_header(reviewer_user):
 @pytest.mark.asyncio
 async def test_validation_error_redacts_raw_plate():
     """Verify that validation errors on plate_no never echo raw text to the client."""
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
         secret_raw_plate = "SECRET_SUPER_LONG_PLATE_12345"
         payload = {
             "device_id": "cam-101",
@@ -117,9 +125,7 @@ def test_sentry_before_send_strips_plate_no():
             "query_string": "plate_no=DL01AB9999&limit=10",
         },
         "breadcrumbs": {
-            "values": [
-                {"data": {"plate_no": "DL01AB9999", "action": "scan"}}
-            ]
+            "values": [{"data": {"plate_no": "DL01AB9999", "action": "scan"}}]
         },
         "extra": {
             "plate_no": "DL01AB9999",
@@ -168,7 +174,9 @@ def test_password_hashing_bcrypt():
 
 
 def test_jwt_token_generation_and_decoding():
-    token = create_access_token(subject=42, claims={"email": "reviewer@roadsense.gov", "role": "admin"})
+    token = create_access_token(
+        subject=42, claims={"email": "reviewer@roadsense.gov", "role": "admin"}
+    )
     decoded = decode_access_token(token)
     assert decoded["sub"] == "42"
     assert decoded["email"] == "reviewer@roadsense.gov"
@@ -177,7 +185,9 @@ def test_jwt_token_generation_and_decoding():
 
 @pytest.mark.asyncio
 async def test_reviewer_login_flow(reviewer_user):
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
         # Valid login
         resp = await ac.post(
             "/v1/auth/login",
@@ -215,7 +225,9 @@ async def test_post_observation_success_and_duplicate_409():
         "sig": "sig123",
     }
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
         # 1. First submission -> 201 Created
         resp1 = await ac.post("/v1/observations", json=payload)
         assert resp1.status_code == 201
@@ -236,7 +248,9 @@ async def test_post_observation_success_and_duplicate_409():
 
 
 @pytest.mark.asyncio
-async def test_incidents_approval_and_rejection_audit_fields(auth_header, reviewer_user):
+async def test_incidents_approval_and_rejection_audit_fields(
+    auth_header, reviewer_user
+):
     # Setup candidate incident in DB
     async with TestAsyncSession() as db:
         incident = CandidateIncident(
@@ -252,7 +266,9 @@ async def test_incidents_approval_and_rejection_audit_fields(auth_header, review
         await db.refresh(incident)
         inc_id = incident.id
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
         # 1. Accessing without JWT -> 401
         resp_unauth = await ac.get(f"/v1/incidents/{inc_id}")
         assert resp_unauth.status_code == 401
@@ -263,7 +279,9 @@ async def test_incidents_approval_and_rejection_audit_fields(auth_header, review
         assert resp_auth.json()["id"] == inc_id
 
         # 3. Approve incident -> Must populate reviewed_by and reviewed_at
-        resp_approve = await ac.post(f"/v1/incidents/{inc_id}/approve", headers=auth_header)
+        resp_approve = await ac.post(
+            f"/v1/incidents/{inc_id}/approve", headers=auth_header
+        )
         assert resp_approve.status_code == 200
         approve_data = resp_approve.json()
         assert approve_data["new_status"] == "confirmed"
@@ -278,7 +296,9 @@ async def test_incidents_approval_and_rejection_audit_fields(auth_header, review
             assert updated.reviewed_at is not None
 
         # 4. Reject incident -> Must update status to rejected and update reviewed_by/at
-        resp_reject = await ac.post(f"/v1/incidents/{inc_id}/reject", headers=auth_header)
+        resp_reject = await ac.post(
+            f"/v1/incidents/{inc_id}/reject", headers=auth_header
+        )
         assert resp_reject.status_code == 200
         reject_data = resp_reject.json()
         assert reject_data["new_status"] == "rejected"
@@ -296,7 +316,9 @@ async def test_evidence_polling_and_upload_flow():
     nonce = str(uuid.uuid4())
 
     async with TestAsyncSession() as db:
-        device = Device(device_id=device_id, public_key="pubkey", trust_score=0.8, status="active")
+        device = Device(
+            device_id=device_id, public_key="pubkey", trust_score=0.8, status="active"
+        )
         incident = CandidateIncident(
             violation_type="wrong_side",
             plate_no=hash_plate("DL01CD2222"),
@@ -315,7 +337,9 @@ async def test_evidence_polling_and_upload_flow():
         db.add(evidence)
         await db.commit()
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
         # 1. Device polls for pending evidence requests
         poll_resp = await ac.get(f"/v1/evidence-requests?device_id={device_id}")
         assert poll_resp.status_code == 200
@@ -399,7 +423,9 @@ async def test_stale_sweep_ignores_solitary_red_light_observations(monkeypatch):
 
     monkeypatch.setattr(sweeps, "get_session_factory", lambda: TestAsyncSession)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
         response = await ac.post(
             "/v1/internal/sweep/stale-observations?time_window_seconds=300"
         )
@@ -456,7 +482,9 @@ async def test_evidence_media_retrieval_failure_returns_502(monkeypatch):
         await db.commit()
 
     # Request media proxy — storage is unreachable / mock returns None
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
         response = await ac.get("/v1/evidence/nonce-fail-test/media")
 
     assert response.status_code == 502
@@ -492,7 +520,9 @@ async def test_evidence_media_simulated_when_flag_enabled(monkeypatch):
         db.add(ev)
         await db.commit()
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
         response = await ac.get("/v1/evidence/nonce-sim-test/media")
 
     assert response.status_code == 200
@@ -503,7 +533,9 @@ async def test_evidence_media_simulated_when_flag_enabled(monkeypatch):
 @pytest.mark.asyncio
 async def test_evidence_media_nonexistent_returns_404():
     """Nonexistent nonce or missing storage_ref returns 404."""
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
         response = await ac.get("/v1/evidence/nonexistent-nonce/media")
     assert response.status_code == 404
 
@@ -535,4 +567,3 @@ async def test_schema_check_constraints_enforced():
         with pytest.raises(IntegrityError):
             await db.commit()
         await db.rollback()
-

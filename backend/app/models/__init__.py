@@ -10,10 +10,10 @@ from app.models.entities import (
 
 __all__ = [
     "Base",
-    "Device",
-    "Reviewer",
-    "Observation",
     "CandidateIncident",
+    "Device",
     "Evidence",
+    "Observation",
+    "Reviewer",
     "incident_observations",
 ]

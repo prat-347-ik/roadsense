@@ -30,7 +30,9 @@ class WebcamFrameSource:
         self.source = source
         self.location = location
         self.loop = loop
-        self._capture = cv2.VideoCapture(str(source) if isinstance(source, Path) else source)
+        self._capture = cv2.VideoCapture(
+            str(source) if isinstance(source, Path) else source
+        )
         if not self._capture.isOpened():
             raise OSError(f"Unable to open capture source: {source}")
 

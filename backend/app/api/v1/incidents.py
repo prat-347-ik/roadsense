@@ -1,13 +1,9 @@
 from datetime import datetime, timezone
-from typing import Annotated, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import desc, func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from typing import Annotated
 
-from app.api.deps import get_current_reviewer, get_async_db
+from app.api.deps import get_async_db, get_current_reviewer
 from app.core.logging_config import logger
-from app.models.entities import CandidateIncident, Evidence, Observation, Reviewer
+from app.models.entities import CandidateIncident, Reviewer
 from app.schemas.observation import (
     IncidentDetail,
     IncidentReviewActionResponse,
@@ -16,21 +12,27 @@ from app.schemas.observation import (
 )
 from app.services.progression import ObservationPoint, evaluate_wrong_way_progression
 from app.services.storage import storage_service
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import desc, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
 
-@router.get("", response_model=List[IncidentSummary])
+@router.get("", response_model=list[IncidentSummary])
 async def list_incidents(
     reviewer: Annotated[Reviewer, Depends(get_current_reviewer)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
-    status_filter: Optional[str] = Query(None, alias="status"),
-    violation_type: Optional[str] = Query(None),
+    status_filter: str | None = Query(None, alias="status"),
+    violation_type: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-) -> List[IncidentSummary]:
+) -> list[IncidentSummary]:
     """Reviewer-facing list of candidate and corroborated incidents."""
-    stmt = select(CandidateIncident).options(selectinload(CandidateIncident.observations))
+    stmt = select(CandidateIncident).options(
+        selectinload(CandidateIncident.observations)
+    )
 
     if status_filter:
         stmt = stmt.where(CandidateIncident.status == status_filter)
@@ -85,17 +87,20 @@ async def get_incident(
         )
 
     # Progression and rejection diagnostic analysis
-    incident_rejection_reason: Optional[str] = None
-    incident_rejection_details: Optional[str] = None
+    incident_rejection_reason: str | None = None
+    incident_rejection_details: str | None = None
 
     sorted_obs = sorted(incident.observations, key=lambda x: x.ts)
-    obs_diagnostics: dict[int, tuple[Optional[str], Optional[str]]] = {}
+    obs_diagnostics: dict[int, tuple[str | None, str | None]] = {}
 
     if incident.violation_type == "wrong_side" and incident.status == "rejected":
         if len(sorted_obs) == 1:
             incident_rejection_reason = "overtaking_artifact"
             incident_rejection_details = "Solitary observation aged past corroboration window with no corroborating vehicle report (momentary overtaking artifact)."
-            obs_diagnostics[sorted_obs[0].id] = (incident_rejection_reason, incident_rejection_details)
+            obs_diagnostics[sorted_obs[0].id] = (
+                incident_rejection_reason,
+                incident_rejection_details,
+            )
         elif len(sorted_obs) > 1:
             obs_points = [
                 ObservationPoint(
@@ -115,10 +120,15 @@ async def get_incident(
                 incident_rejection_details = eval_res.details
             else:
                 incident_rejection_reason = "inconsistent_trajectory"
-                incident_rejection_details = eval_res.details or "Trajectory failed progression criteria."
+                incident_rejection_details = (
+                    eval_res.details or "Trajectory failed progression criteria."
+                )
 
             for o in sorted_obs:
-                obs_diagnostics[o.id] = (incident_rejection_reason, incident_rejection_details)
+                obs_diagnostics[o.id] = (
+                    incident_rejection_reason,
+                    incident_rejection_details,
+                )
 
     elif incident.status == "corroborated_no_evidence":
         incident_rejection_details = "Evidence collection request timed out before edge devices uploaded video/image clips."
@@ -143,7 +153,9 @@ async def get_incident(
     evidence_list = []
     for ev in incident.evidence_items:
         presigned_url = (
-            storage_service.get_presigned_url(ev.storage_ref) if ev.storage_ref else None
+            storage_service.get_presigned_url(ev.storage_ref)
+            if ev.storage_ref
+            else None
         )
         # Proxy URL through backend API for reliable in-browser video playback
         proxy_url = f"/v1/evidence/{ev.event_nonce}/media" if ev.storage_ref else None
@@ -209,7 +221,9 @@ async def approve_incident(
 
     await db.commit()
 
-    logger.info(f"Incident {incident_id} approved by reviewer {reviewer.id} at {now.isoformat()}")
+    logger.info(
+        f"Incident {incident_id} approved by reviewer {reviewer.id} at {now.isoformat()}"
+    )
 
     return IncidentReviewActionResponse(
         status="success",
@@ -253,7 +267,9 @@ async def reject_incident(
 
     await db.commit()
 
-    logger.info(f"Incident {incident_id} rejected by reviewer {reviewer.id} at {now.isoformat()}")
+    logger.info(
+        f"Incident {incident_id} rejected by reviewer {reviewer.id} at {now.isoformat()}"
+    )
 
     return IncidentReviewActionResponse(
         status="success",

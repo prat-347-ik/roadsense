@@ -4,31 +4,32 @@ import logging
 import os
 from pathlib import Path
 from typing import Any
+
 import httpx
 
 logger = logging.getLogger("edge.uplink.client")
 
-DEFAULT_API_BASE_URL = os.environ.get("ROADSENSE_API_URL") or os.environ.get("API_URL") or "http://localhost:8000"
+DEFAULT_API_BASE_URL = (
+    os.environ.get("ROADSENSE_API_URL")
+    or os.environ.get("API_URL")
+    or "http://localhost:8000"
+)
 
 
 class UplinkError(Exception):
     """Base exception for edge uplink communications."""
-    pass
 
 
 class UplinkConnectionError(UplinkError):
     """Raised when connection to backend server fails."""
-    pass
 
 
 class DuplicateNonceError(UplinkError):
     """Raised on HTTP 409 Conflict (event_nonce duplicate)."""
-    pass
 
 
 class UplinkValidationError(UplinkError):
     """Raised on HTTP 422 Unprocessable Entity (payload schema mismatch)."""
-    pass
 
 
 class RoadSenseUplinkClient:
@@ -80,7 +81,11 @@ class RoadSenseUplinkClient:
 
             if response.status_code == 409:
                 err_detail = response.json().get("detail", "Duplicate nonce")
-                logger.warning("Duplicate observation nonce '%s': %s", burst.get("event_nonce"), err_detail)
+                logger.warning(
+                    "Duplicate observation nonce '%s': %s",
+                    burst.get("event_nonce"),
+                    err_detail,
+                )
                 return {
                     "status": "duplicate",
                     "event_nonce": burst.get("event_nonce"),
@@ -89,8 +94,12 @@ class RoadSenseUplinkClient:
 
             if response.status_code == 422:
                 err_detail = response.json().get("detail", response.text)
-                logger.error("Backend schema validation failed (HTTP 422): %s", err_detail)
-                raise UplinkValidationError(f"Backend schema validation failed: {err_detail}")
+                logger.error(
+                    "Backend schema validation failed (HTTP 422): %s", err_detail
+                )
+                raise UplinkValidationError(
+                    f"Backend schema validation failed: {err_detail}"
+                )
 
             if response.status_code == 400:
                 err_detail = response.json().get("detail", "Bad Request")
@@ -102,7 +111,9 @@ class RoadSenseUplinkClient:
 
         except httpx.RequestError as exc:
             logger.error("Failed to connect to RoadSense backend at %s: %s", url, exc)
-            raise UplinkConnectionError(f"Connection to backend failed at {url}: {exc}") from exc
+            raise UplinkConnectionError(
+                f"Connection to backend failed at {url}: {exc}"
+            ) from exc
 
     def poll_evidence_requests(self, device_id: str) -> list[dict[str, Any]]:
         """Polls backend for pending evidence requests addressed to device_id."""
@@ -114,7 +125,9 @@ class RoadSenseUplinkClient:
                 return response.json()
         except httpx.RequestError as exc:
             logger.error("Failed to poll evidence requests from %s: %s", url, exc)
-            raise UplinkConnectionError(f"Polling evidence requests failed: {exc}") from exc
+            raise UplinkConnectionError(
+                f"Polling evidence requests failed: {exc}"
+            ) from exc
 
     def upload_evidence(
         self,
@@ -161,5 +174,10 @@ class RoadSenseUplinkClient:
                 response.raise_for_status()
                 return response.json()
         except httpx.RequestError as exc:
-            logger.error("Failed to upload evidence for nonce %s to %s: %s", event_nonce, url, exc)
+            logger.error(
+                "Failed to upload evidence for nonce %s to %s: %s",
+                event_nonce,
+                url,
+                exc,
+            )
             raise UplinkConnectionError(f"Evidence upload failed: {exc}") from exc

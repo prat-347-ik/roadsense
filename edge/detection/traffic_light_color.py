@@ -109,12 +109,20 @@ def classify_traffic_light_color(
 
     yellow_count = int(
         cv2.countNonZero(
-            cv2.inRange(hsv, np.array(yellow_range[0], dtype=np.uint8), np.array(yellow_range[1], dtype=np.uint8))
+            cv2.inRange(
+                hsv,
+                np.array(yellow_range[0], dtype=np.uint8),
+                np.array(yellow_range[1], dtype=np.uint8),
+            )
         )
     )
     green_count = int(
         cv2.countNonZero(
-            cv2.inRange(hsv, np.array(green_range[0], dtype=np.uint8), np.array(green_range[1], dtype=np.uint8))
+            cv2.inRange(
+                hsv,
+                np.array(green_range[0], dtype=np.uint8),
+                np.array(green_range[1], dtype=np.uint8),
+            )
         )
     )
 
@@ -152,7 +160,9 @@ def classify_traffic_light_color(
 
     second_best = sorted(counts.values(), reverse=True)[1]
     margin = (winner_count - second_best) / max(total_signal, 1)
-    heuristic_confidence = float(min(1.0, max(0.0, 0.55 * relative_signal + 0.45 * margin + 0.05)))
+    heuristic_confidence = float(
+        min(1.0, max(0.0, 0.55 * relative_signal + 0.45 * margin + 0.05))
+    )
 
     if winner == "red" and red_count >= max(green_count, yellow_count):
         color = "red"

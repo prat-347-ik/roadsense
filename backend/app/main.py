@@ -1,11 +1,13 @@
 import logging
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 try:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
     _APScheduler = AsyncIOScheduler
 except ImportError:  # apscheduler not installed — scheduler is a no-op
     _APScheduler = None
@@ -15,7 +17,7 @@ from app.core.config import settings
 from app.core.errors import validation_exception_handler
 from app.core.logging_config import setup_logging
 from app.core.sentry import init_sentry
-from app.services.sweeps import sweep_stale_observations, sweep_evidence_ttl
+from app.services.sweeps import sweep_evidence_ttl, sweep_stale_observations
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +31,10 @@ async def lifespan(app: FastAPI):
     # Ensure tables exist and seed default reviewer only when explicitly enabled (local standalone dev)
     if settings.AUTO_INIT_DB:
         try:
-            from app.db.session import get_engine
             from app.db.seed import seed_default_reviewer
+            from app.db.session import get_engine
             from app.models.entities import Base
+
             engine = get_engine()
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
@@ -100,7 +103,8 @@ app.add_middleware(
 app.include_router(api_v1_router)
 
 # Internal sweep-trigger routes (firewall/mesh-protected in production)
-from app.api.v1.internal import router as internal_router  # noqa: E402
+from app.api.v1.internal import router as internal_router
+
 app.include_router(internal_router, prefix="/v1")
 
 

@@ -13,9 +13,9 @@ from edge.rules.wrong_way import (
 __all__ = [
     "RedLightCandidateDecision",
     "TrafficLightStateSmoother",
+    "WrongWayCandidateDecision",
     "check_red_light_candidate",
+    "check_wrong_way_candidate",
     "crossed_stop_line",
     "is_sightline_blocked",
-    "WrongWayCandidateDecision",
-    "check_wrong_way_candidate",
 ]

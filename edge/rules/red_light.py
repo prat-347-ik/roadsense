@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from edge.tracking.tracker import Track
@@ -46,7 +46,11 @@ class TrafficLightStateSmoother:
         if hasattr(value, "value"):
             value = value.value
         normalized = str(value).strip().upper()
-        return normalized if normalized in {"RED", "YELLOW", "GREEN", "UNKNOWN"} else "UNKNOWN"
+        return (
+            normalized
+            if normalized in {"RED", "YELLOW", "GREEN", "UNKNOWN"}
+            else "UNKNOWN"
+        )
 
     def update(self, observation: str | Any | None) -> str:
         normalized = self._normalize(observation)
@@ -61,9 +65,14 @@ class TrafficLightStateSmoother:
         for value in non_unknown:
             counts[value] = counts.get(value, 0) + 1
 
-        candidate, candidate_count = max(counts.items(), key=lambda item: (item[1], item[0]))
+        candidate, candidate_count = max(
+            counts.items(), key=lambda item: (item[1], item[0])
+        )
         ratio = candidate_count / len(non_unknown)
-        if candidate_count >= self.min_agreeing_observations and ratio >= self.min_agreement_ratio:
+        if (
+            candidate_count >= self.min_agreeing_observations
+            and ratio >= self.min_agreement_ratio
+        ):
             self.current_state = candidate
             return self.current_state
 
@@ -78,13 +87,17 @@ class TrafficLightStateSmoother:
         return self.current_state
 
 
-def _resolve_stop_line_y(frame_height: int, stop_line_y: float | None = None, stop_line_y_ratio: float = 0.65) -> float:
+def _resolve_stop_line_y(
+    frame_height: int, stop_line_y: float | None = None, stop_line_y_ratio: float = 0.65
+) -> float:
     if stop_line_y is not None:
         return float(stop_line_y)
     return float(frame_height * max(0.0, min(stop_line_y_ratio, 1.0)))
 
 
-def _vehicle_origin_in_approach_region(track: Track, frame_height: int, origin_bottom_ratio: float = 1.0 / 3.0) -> bool:
+def _vehicle_origin_in_approach_region(
+    track: Track, frame_height: int, origin_bottom_ratio: float = 1.0 / 3.0
+) -> bool:
     if not track.bbox_history:
         return False
     _, first_bbox = track.bbox_history[0]
@@ -105,7 +118,9 @@ def crossed_stop_line(track: Track, stop_line_y: float, min_history: int = 2) ->
     points = [_bottom_center(bbox) for _, bbox in track.bbox_history]
     previous = points[-2]
     latest = points[-1]
-    return latest[1] <= stop_line_y or (previous[1] > stop_line_y and latest[1] <= stop_line_y)
+    return latest[1] <= stop_line_y or (
+        previous[1] > stop_line_y and latest[1] <= stop_line_y
+    )
 
 
 def is_sightline_blocked(
@@ -115,6 +130,8 @@ def is_sightline_blocked(
     min_bottom_ratio: float = 0.70,
     center_x_range: tuple[float, float] = (0.30, 0.70),
     min_width_ratio: float = 0.20,
+    candidate_track: Track | None = None,
+    ignore_candidate: bool = False,
 ) -> bool:
     """Check if host sightline into the intersection is blocked by a vehicle directly ahead.
 
@@ -122,6 +139,23 @@ def is_sightline_blocked(
     so nothing downstream of the host can be reliably observed.
     """
     for t in tracks:
+        if ignore_candidate and candidate_track is not None:
+            if t.track_id == candidate_track.track_id:
+                continue
+            tb = t.current_bbox
+            cb = candidate_track.current_bbox
+            x1 = max(tb[0], cb[0])
+            y1 = max(tb[1], cb[1])
+            x2 = min(tb[2], cb[2])
+            y2 = min(tb[3], cb[3])
+            if x2 > x1 and y2 > y1:
+                ia = (x2 - x1) * (y2 - y1)
+                a1 = (tb[2] - tb[0]) * (tb[3] - tb[1])
+                a2 = (cb[2] - cb[0]) * (cb[3] - cb[1])
+                union = a1 + a2 - ia
+                if union > 0 and (ia / union) > 0.5:
+                    continue
+
         b = t.current_bbox
         w = b[2] - b[0]
         cx = (b[0] + b[2]) / 2.0
@@ -129,7 +163,9 @@ def is_sightline_blocked(
 
         if (
             y2 >= frame_height * min_bottom_ratio
-            and (frame_width * center_x_range[0]) <= cx <= (frame_width * center_x_range[1])
+            and (frame_width * center_x_range[0])
+            <= cx
+            <= (frame_width * center_x_range[1])
             and w >= frame_width * min_width_ratio
         ):
             return True
@@ -214,7 +250,9 @@ def check_red_light_candidate(
             signal_color=signal_color,
         )
 
-    if not _vehicle_origin_in_approach_region(track, frame_height, origin_bottom_ratio=origin_bottom_ratio):
+    if not _vehicle_origin_in_approach_region(
+        track, frame_height, origin_bottom_ratio=origin_bottom_ratio
+    ):
         _, first_bbox = track.bbox_history[0]
         first_bottom = float(first_bbox[3])
         boundary = float(frame_height * max(0.0, min(origin_bottom_ratio, 1.0)))
@@ -260,7 +298,9 @@ def check_red_light_candidate(
             signal_color=signal_color,
         )
 
-    effective_stop_line = _resolve_stop_line_y(frame_height, stop_line_y=stop_line_y, stop_line_y_ratio=stop_line_y_ratio)
+    effective_stop_line = _resolve_stop_line_y(
+        frame_height, stop_line_y=stop_line_y, stop_line_y_ratio=stop_line_y_ratio
+    )
     _, latest_bbox = track.bbox_history[-1]
     latest_bottom_center = _bottom_center(latest_bbox)
     if not crossed_stop_line(track, effective_stop_line):

@@ -1,15 +1,15 @@
-from typing import Annotated, Any, AsyncGenerator, Dict, Optional
-from fastapi import Depends, Header, HTTPException, status
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Annotated, Any
 
 from app.core.security import decode_access_token
 from app.db.session import get_async_db
 from app.models.entities import Reviewer
+from fastapi import Depends, Header, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def get_current_reviewer_claims(
-    authorization: Optional[str] = Header(None, description="Bearer <JWT_TOKEN>"),
+    authorization: str | None = Header(None, description="Bearer <JWT_TOKEN>"),
 ) -> dict[str, Any]:
     """Validate JWT token from Authorization header and return claims."""
     if not authorization or not authorization.startswith("Bearer "):

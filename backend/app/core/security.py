@@ -1,9 +1,10 @@
-from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import os
 import re
-from typing import Any, Mapping
+from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import bcrypt
 import jwt
@@ -78,7 +79,9 @@ def create_access_token(
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = datetime.now(timezone.utc) + timedelta(
+            minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
+        )
 
     to_encode: dict[str, Any] = {
         "sub": str(subject),
@@ -88,7 +91,9 @@ def create_access_token(
     if claims:
         to_encode.update(claims)
 
-    encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
+    encoded_jwt = jwt.encode(
+        to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM
+    )
     return encoded_jwt
 
 

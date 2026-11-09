@@ -1,22 +1,22 @@
 import io
 from datetime import timedelta
-from typing import Optional
-import urllib3
-from minio import Minio
-from minio.error import S3Error
 
+import urllib3
 from app.core.config import settings
 from app.core.logging_config import logger
+from minio import Minio
 
 
 class StorageService:
     def __init__(self) -> None:
-        self.endpoint = settings.MINIO_ENDPOINT_URL.replace("http://", "").replace("https://", "")
+        self.endpoint = settings.MINIO_ENDPOINT_URL.replace("http://", "").replace(
+            "https://", ""
+        )
         self.bucket = settings.MINIO_BUCKET
         self._connected = False
         self.client = self._init_client()
 
-    def _init_client(self) -> Optional[Minio]:
+    def _init_client(self) -> Minio | None:
         try:
             http_client = urllib3.PoolManager(
                 timeout=urllib3.Timeout(connect=1.0, read=5.0),
@@ -46,15 +46,17 @@ class StorageService:
             self._connected = True
             return True
         except Exception as e:
-            logger.info(f"MinIO storage offline, operating in simulated storage mode: {e}")
+            logger.info(
+                f"MinIO storage offline, operating in simulated storage mode: {e}"
+            )
             self._connected = False
             return False
 
     def _parse_object_name(self, storage_ref: str) -> str:
         if storage_ref.startswith(f"minio://{self.bucket}/"):
-            return storage_ref[len(f"minio://{self.bucket}/"):]
+            return storage_ref[len(f"minio://{self.bucket}/") :]
         if storage_ref.startswith("minio://"):
-            parts = storage_ref[len("minio://"):].split("/", 1)
+            parts = storage_ref[len("minio://") :].split("/", 1)
             return parts[1] if len(parts) > 1 else parts[0]
         return storage_ref
 
@@ -103,7 +105,7 @@ class StorageService:
             logger.warning(f"Failed to generate presigned URL for {storage_ref}: {e}")
             return storage_ref
 
-    def get_evidence_bytes(self, storage_ref: str) -> tuple[Optional[bytes], str]:
+    def get_evidence_bytes(self, storage_ref: str) -> tuple[bytes | None, str]:
         """Fetch raw bytes and content type for evidence clip."""
         if not storage_ref or not self.ensure_bucket_exists() or not self.client:
             return None, "video/mp4"
@@ -126,4 +128,3 @@ class StorageService:
 
 
 storage_service = StorageService()
-

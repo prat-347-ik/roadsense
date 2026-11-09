@@ -1,5 +1,6 @@
 .env
 __pycache__/
+*.pyc
 *.py[cod]
 *.pt
 .pytest_cache/
@@ -9,6 +10,10 @@ __pycache__/
 .venv_clean/
 node_modules/
 dist/
+build/
+*.egg-info/
+.DS_Store
+*.log
 frontend/.vite/
 backend/venv/
 .vscode/settings.json

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-import json
-from pathlib import Path
 import sys
 import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import cv2
 import httpx
@@ -41,13 +40,18 @@ def run_storage_integration_test():
         queue_db.unlink(missing_ok=True)
     if evidence_dir.exists():
         import shutil
+
         shutil.rmtree(evidence_dir, ignore_errors=True)
 
     obs_queue = ObservationQueue(db_path=queue_db, base_delay=1.0, max_delay=10.0)
     ev_buffer = EvidenceBuffer(buffer_dir=evidence_dir)
 
-    signer_1 = DeviceSigner(key_path=REPO_ROOT / "edge" / "uplink" / "keys" / "device_1_key.pem")
-    signer_2 = DeviceSigner(key_path=REPO_ROOT / "edge" / "uplink" / "keys" / "device_2_key.pem")
+    signer_1 = DeviceSigner(
+        key_path=REPO_ROOT / "edge" / "uplink" / "keys" / "device_1_key.pem"
+    )
+    signer_2 = DeviceSigner(
+        key_path=REPO_ROOT / "edge" / "uplink" / "keys" / "device_2_key.pem"
+    )
     device_1_id = "edge-cam-field-01"
     device_2_id = "edge-cam-field-02"
 
@@ -81,10 +85,13 @@ def run_storage_integration_test():
         v_preds = v_detector.detect(img)
         v_dets = [
             Detection(bbox=list(p.bbox), score=p.confidence, class_name=p.class_name)
-            for p in v_preds if p.class_name in ["car", "truck", "bus", "motorcycle"]
+            for p in v_preds
+            if p.class_name in ["car", "truck", "bus", "motorcycle"]
         ]
 
-        active_tracks = tracker.update(v_dets, frame_idx=f_idx, frame_image=img, plate_detections=[])
+        active_tracks = tracker.update(
+            v_dets, frame_idx=f_idx, frame_image=img, plate_detections=[]
+        )
         real_candidate_clip_frames.append(cv2.resize(img, (640, 360)))
 
         for t in active_tracks:
@@ -100,14 +107,22 @@ def run_storage_integration_test():
                     timestamp=ts,
                     signer=signer_1,
                 )
-                print(f"  Origin: Genuinely detected in real footage (Clip 170004, Frame {f_idx})")
-                print(f"  Trigger: Track {t.track_id} ({t.vehicle_class}) wrong-way rule fired: {decision.reason}")
+                print(
+                    f"  Origin: Genuinely detected in real footage (Clip 170004, Frame {f_idx})"
+                )
+                print(
+                    f"  Trigger: Track {t.track_id} ({t.vehicle_class}) wrong-way rule fired: {decision.reason}"
+                )
                 print(f"  Device ID: {device_1_id}")
                 print(f"  Event Nonce: {real_candidate_burst['event_nonce']}")
-                print(f"  Role: Single-camera uncorroborated candidate. Will stay in status: 'candidate'.")
+                print(
+                    "  Role: Single-camera uncorroborated candidate. Will stay in status: 'candidate'."
+                )
                 break
 
-    assert real_candidate_burst is not None, "Failed to extract candidate from real footage"
+    assert real_candidate_burst is not None, (
+        "Failed to extract candidate from real footage"
+    )
 
     # --- Observation 2: MANUALLY CONSTRUCTED CANDIDATE TO TEST CORROBORATION ---
     print("\n[Observation 2 of 3: CONSTRUCTED RED-LIGHT CANDIDATE (Device 1)]")
@@ -124,34 +139,46 @@ def run_storage_integration_test():
         timestamp=t_now - timedelta(seconds=3),
         signer=signer_1,
     )
-    print(f"  Origin: Manually constructed red-light burst for Device 1")
+    print("  Origin: Manually constructed red-light burst for Device 1")
     print(f"  Device ID: {device_1_id}")
     print(f"  Event Nonce: {rl_burst_1['event_nonce']}")
     print(f"  Plate: {corroboration_plate}")
-    print(f"  Role: Primary candidate awaiting corroboration from an independent device.")
+    print(
+        "  Role: Primary candidate awaiting corroboration from an independent device."
+    )
 
     # --- Observation 3: MANUALLY CONSTRUCTED CORROBORATING PARTNER (Device 2) ---
     print("\n[Observation 3 of 3: CONSTRUCTED CORROBORATING PARTNER (Device 2)]")
     rl_burst_2 = assemble_burst(
         violation_type="red_light",
         plate_no=corroboration_plate,  # Identical plate string
-        device_id=device_2_id,          # Different reporting device
-        lat=18.5302,                    # Advancing spatial location (~22m displacement)
+        device_id=device_2_id,  # Different reporting device
+        lat=18.5302,  # Advancing spatial location (~22m displacement)
         lon=73.8501,
-        timestamp=t_now,                # 3.0s time delta within corroboration window
+        timestamp=t_now,  # 3.0s time delta within corroboration window
         signer=signer_2,
     )
-    print(f"  Origin: Manually constructed corroborating observation for Device 2")
+    print("  Origin: Manually constructed corroborating observation for Device 2")
     print(f"  Device ID: {device_2_id} (Independent camera)")
     print(f"  Event Nonce: {rl_burst_2['event_nonce']}")
     print(f"  Plate: {corroboration_plate} (EXACT MATCH to Observation 2)")
-    print(f"  Role: Corroborates Observation 2, causing backend to issue EvidenceRequest to Device 1.")
+    print(
+        "  Role: Corroborates Observation 2, causing backend to issue EvidenceRequest to Device 1."
+    )
 
     print("\n[CORROBORATION LINK SUMMARY]")
-    print(f"  -> Obs #1 ({real_candidate_burst['event_nonce'][:12]}...): Real detection, 1 device -> Candidate only (No EvidenceRequest expected).")
-    print(f"  -> Obs #2 ({rl_burst_1['event_nonce'][:12]}...) + Obs #3 ({rl_burst_2['event_nonce'][:12]}...):")
-    print(f"     Paired across 2 devices ({device_1_id} & {device_2_id}) for plate '{corroboration_plate}'.")
-    print(f"     Backend clustering will corroborate the pair and trigger EvidenceRequest for Obs #2 ({rl_burst_1['event_nonce'][:12]}...).")
+    print(
+        f"  -> Obs #1 ({real_candidate_burst['event_nonce'][:12]}...): Real detection, 1 device -> Candidate only (No EvidenceRequest expected)."
+    )
+    print(
+        f"  -> Obs #2 ({rl_burst_1['event_nonce'][:12]}...) + Obs #3 ({rl_burst_2['event_nonce'][:12]}...):"
+    )
+    print(
+        f"     Paired across 2 devices ({device_1_id} & {device_2_id}) for plate '{corroboration_plate}'."
+    )
+    print(
+        f"     Backend clustering will corroborate the pair and trigger EvidenceRequest for Obs #2 ({rl_burst_1['event_nonce'][:12]}...)."
+    )
 
     # 3. Buffer Local Evidence Clips in EvidenceBuffer
     print("\n" + "=" * 80)
@@ -163,16 +190,23 @@ def run_storage_integration_test():
         event_nonce=real_candidate_burst["event_nonce"],
         data=real_candidate_clip_frames[:15],
         fps=5.0,
-        metadata={"source": "real_dashcam_footage", "frames": len(real_candidate_clip_frames[:15])},
+        metadata={
+            "source": "real_dashcam_footage",
+            "frames": len(real_candidate_clip_frames[:15]),
+        },
     )
     print(f"[Evidence Clip 1 - Real Footage]: {clip_path_1.name}")
-    print(f"  Composition: 15 consecutive 640x360 frames from real dashcam road video.")
-    print(f"  File Size: {clip_path_1.stat().st_size:,} bytes (~750 KB, high visual entropy).")
+    print("  Composition: 15 consecutive 640x360 frames from real dashcam road video.")
+    print(
+        f"  File Size: {clip_path_1.stat().st_size:,} bytes (~750 KB, high visual entropy)."
+    )
 
     # Buffer synthetic frames for Observation 2
     # Note on size: 10 solid-color frames (240x320) contain zero spatial/texture frequency,
     # so MPEG-4 video compression compresses them down to ~9.2 KB.
-    rl_clip_frames = [np.full((240, 320, 3), (0, 0, 180 + i * 5), dtype=np.uint8) for i in range(10)]
+    rl_clip_frames = [
+        np.full((240, 320, 3), (0, 0, 180 + i * 5), dtype=np.uint8) for i in range(10)
+    ]
     clip_path_rl = ev_buffer.store_clip(
         event_nonce=rl_burst_1["event_nonce"],
         data=rl_clip_frames,
@@ -180,23 +214,29 @@ def run_storage_integration_test():
         metadata={"source": "synthetic_test_sequence", "violation": "red_light"},
     )
     print(f"\n[Evidence Clip 2 - Test Sequence]: {clip_path_rl.name}")
-    print(f"  Composition: 10-frame synthetic test video (240x320 solid crimson gradient frames).")
-    print(f"  Encoding Path: Real cv2.VideoWriter encoding path in EvidenceBuffer.")
+    print(
+        "  Composition: 10-frame synthetic test video (240x320 solid crimson gradient frames)."
+    )
+    print("  Encoding Path: Real cv2.VideoWriter encoding path in EvidenceBuffer.")
     print(f"  File Size: {clip_path_rl.stat().st_size:,} bytes (~9.2 KB).")
-    print(f"  Why 9.2 KB? Uniform flat frames compress heavily in MPEG-4; used to verify encoding & upload mechanics.")
+    print(
+        "  Why 9.2 KB? Uniform flat frames compress heavily in MPEG-4; used to verify encoding & upload mechanics."
+    )
 
     # 4. Simulate Offline Outage: Point Client at Unreachable Server
     print("\n" + "=" * 80)
     print("               PHASE 1: SIMULATING OFFLINE NETWORK OUTAGE")
     print("=" * 80)
-    offline_client = RoadSenseUplinkClient(base_url="http://127.0.0.1:59999", timeout=1.0)
+    offline_client = RoadSenseUplinkClient(
+        base_url="http://127.0.0.1:59999", timeout=1.0
+    )
 
     # Enqueue candidate bursts during outage
     obs_queue.enqueue(real_candidate_burst)
     obs_queue.enqueue(rl_burst_1)
     obs_queue.enqueue(rl_burst_2)
 
-    print(f"All 3 observations enqueued into ObservationQueue during network outage.")
+    print("All 3 observations enqueued into ObservationQueue during network outage.")
     print(f"Current Queue Depth: {obs_queue.get_queue_depth()}")
     assert obs_queue.get_queue_depth() == 3
 
@@ -209,7 +249,9 @@ def run_storage_integration_test():
     assert offline_stats["sent"] == 0
     assert offline_stats["retry_pending"] == 3
     assert obs_queue.get_queue_depth() == 3
-    print("[SUCCESS] Zero observations lost during outage. Queue depth is 3. Exponential backoff armed.")
+    print(
+        "[SUCCESS] Zero observations lost during outage. Queue depth is 3. Exponential backoff armed."
+    )
 
     # 5. Restore Connection: Flush to Real Live Backend
     print("\n" + "=" * 80)
@@ -230,7 +272,9 @@ def run_storage_integration_test():
     print(f"Flush Result Online: {online_stats}")
     assert online_stats["sent"] == 3
     assert obs_queue.get_queue_depth() == 0
-    print(f"[SUCCESS] All 3 queued observations delivered to live backend. Queue depth drained to 0.")
+    print(
+        "[SUCCESS] All 3 queued observations delivered to live backend. Queue depth drained to 0."
+    )
 
     # 6. Verify Delivered Observations in Live Backend /v1/incidents
     print("\n" + "=" * 80)
@@ -259,34 +303,60 @@ def run_storage_integration_test():
     print(f"Evidence requests received: {len(ev_requests)}")
 
     # Verify that ONLY the corroborated pair (Obs #2 / rl_burst_1) received an evidence request
-    rl_target_ev = next((ev for ev in ev_requests if ev["event_nonce"] == rl_burst_1["event_nonce"]), None)
-    assert rl_target_ev is not None, f"Expected evidence request for corroborated nonce {rl_burst_1['event_nonce']}"
-    print(f"[VERIFIED] Evidence request generated for Corroborated Incident {rl_target_ev['incident_id']}:")
+    rl_target_ev = next(
+        (ev for ev in ev_requests if ev["event_nonce"] == rl_burst_1["event_nonce"]),
+        None,
+    )
+    assert rl_target_ev is not None, (
+        f"Expected evidence request for corroborated nonce {rl_burst_1['event_nonce']}"
+    )
+    print(
+        f"[VERIFIED] Evidence request generated for Corroborated Incident {rl_target_ev['incident_id']}:"
+    )
     print(f"  Target Nonce: {rl_target_ev['event_nonce']}")
     print(f"  Violation: {rl_target_ev['violation_type']}")
     print(f"  Retention Expires At: {rl_target_ev['retention_expires_at']}")
 
     # Confirm Obs #1 did NOT generate an evidence request (proper single-device candidate behavior)
-    real_target_ev = next((ev for ev in ev_requests if ev["event_nonce"] == real_candidate_burst["event_nonce"]), None)
-    assert real_target_ev is None, "Uncorroborated single-camera observation should NOT generate evidence requests"
-    print(f"[VERIFIED] Uncorroborated Obs #1 ({real_candidate_burst['event_nonce'][:12]}...) correctly produced NO evidence request.")
+    real_target_ev = next(
+        (
+            ev
+            for ev in ev_requests
+            if ev["event_nonce"] == real_candidate_burst["event_nonce"]
+        ),
+        None,
+    )
+    assert real_target_ev is None, (
+        "Uncorroborated single-camera observation should NOT generate evidence requests"
+    )
+    print(
+        f"[VERIFIED] Uncorroborated Obs #1 ({real_candidate_burst['event_nonce'][:12]}...) correctly produced NO evidence request."
+    )
 
     # Upload evidence WITHOUT specifying clip_path -> verifies client resolves it via EvidenceBuffer.get_clip()
     print("\nCalling client.upload_evidence(nonce) WITHOUT passing clip_path...")
-    print(f"Client auto-resolves local clip via evidence_buffer.get_clip('{rl_target_ev['event_nonce']}')...")
+    print(
+        f"Client auto-resolves local clip via evidence_buffer.get_clip('{rl_target_ev['event_nonce']}')..."
+    )
     upload_res = online_client.upload_evidence(rl_target_ev["event_nonce"])
     print(f"Upload Response from Backend: {upload_res}")
 
     assert upload_res["status"] == "uploaded"
     assert upload_res["event_nonce"] == rl_target_ev["event_nonce"]
     assert upload_res["storage_ref"] is not None
-    print(f"[SUCCESS] Evidence clip verified in MinIO object storage: {upload_res['storage_ref']}")
+    print(
+        f"[SUCCESS] Evidence clip verified in MinIO object storage: {upload_res['storage_ref']}"
+    )
 
     # Confirm pending evidence requests for this device are cleared
     remaining_reqs = online_client.poll_evidence_requests(device_1_id)
-    cleared = all(r["event_nonce"] != rl_target_ev["event_nonce"] for r in remaining_reqs)
+    cleared = all(
+        r["event_nonce"] != rl_target_ev["event_nonce"] for r in remaining_reqs
+    )
     assert cleared, "Uploaded evidence request was not cleared from pending queue"
-    print(f"[SUCCESS] Pending evidence request cleared from backend queue upon successful upload.")
+    print(
+        "[SUCCESS] Pending evidence request cleared from backend queue upon successful upload."
+    )
 
     print("\n" + "=" * 80)
     print("       ALL STORAGE RESILIENCE & INTEGRATION TESTS PASSED SUCCESSFULLY")

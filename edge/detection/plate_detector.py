@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, TypeAlias
+from typing import Any, TypeAlias
 
 import cv2
 import numpy as np
 from ultralytics import YOLO
 
 BoundingBox: TypeAlias = tuple[float, float, float, float]
-DEFAULT_MODEL_PATH = Path(__file__).resolve().parents[1] / "runs" / "plate_v1" / "weights" / "best.pt"
+DEFAULT_MODEL_PATH = (
+    Path(__file__).resolve().parents[1] / "runs" / "plate_v1" / "weights" / "best.pt"
+)
 
 
 @dataclass(frozen=True)
@@ -35,7 +38,9 @@ class YOLOPlateDetector:
 
         self.model_path = Path(model_path)
         if not self.model_path.exists():
-            raise FileNotFoundError(f"Plate model weights not found at: {self.model_path}")
+            raise FileNotFoundError(
+                f"Plate model weights not found at: {self.model_path}"
+            )
 
         self.confidence_threshold = float(confidence_threshold)
         if not 0.0 <= self.confidence_threshold <= 1.0:
@@ -103,7 +108,11 @@ class YOLOPlateDetector:
                 if confidence < self.confidence_threshold:
                     continue
 
-                bx = box.xyxy[0].cpu().numpy() if hasattr(box.xyxy[0], "cpu") else box.xyxy[0]
+                bx = (
+                    box.xyxy[0].cpu().numpy()
+                    if hasattr(box.xyxy[0], "cpu")
+                    else box.xyxy[0]
+                )
                 x1 = float(bx[0]) * w / 640.0
                 y1 = float(bx[1]) * h / 640.0
                 x2 = float(bx[2]) * w / 640.0

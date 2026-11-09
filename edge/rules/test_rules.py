@@ -1,4 +1,3 @@
-import pytest
 from edge.rules.red_light import (
     TrafficLightStateSmoother,
     check_red_light_candidate,
@@ -32,6 +31,7 @@ def create_synthetic_track(
 # ============================================================================
 # RED LIGHT UNIT TESTS (§3)
 # ============================================================================
+
 
 def test_red_light_crossing_on_red_flags():
     """A vehicle originating in bottom 2/3 moving upward past the stop line during RED."""
@@ -67,7 +67,10 @@ def test_red_light_stopped_before_stop_line_does_not_flag():
     decision = check_red_light_candidate(track, traffic_light_color="RED")
 
     assert decision.is_candidate is False
-    assert "stationary" in decision.reason or "has not crossed stop line" in decision.reason
+    assert (
+        "stationary" in decision.reason
+        or "has not crossed stop line" in decision.reason
+    )
 
 
 def test_red_light_crossing_on_green_does_not_flag():
@@ -91,7 +94,7 @@ def test_red_light_left_edge_exit_exclusion():
         [500, 800, 700, 950],
         [350, 650, 550, 800],
         [200, 500, 400, 650],
-        [40, 400, 240, 550],   # x1 = 40px (< 153px left margin)
+        [40, 400, 240, 550],  # x1 = 40px (< 153px left margin)
     ]
     track = create_synthetic_track(4, boxes, plate_text="MH14CD5678")
     decision = check_red_light_candidate(track, traffic_light_color="RED")
@@ -127,7 +130,9 @@ def test_red_light_sightline_blocked_aborts():
     blocked = is_sightline_blocked([front_vehicle])
     assert blocked is True
 
-    decision = check_red_light_candidate(track, traffic_light_color="RED", sightline_blocked=blocked)
+    decision = check_red_light_candidate(
+        track, traffic_light_color="RED", sightline_blocked=blocked
+    )
     assert decision.is_candidate is False
     assert "Sightline into intersection is blocked" in decision.reason
 
@@ -181,6 +186,7 @@ def test_track_bottom_center_is_derived_from_lowest_edge():
 # ============================================================================
 # WRONG WAY UNIT TESTS (§4.1)
 # ============================================================================
+
 
 def test_wrong_way_downward_in_left_roi_flags():
     """A vehicle in the left-half ROI moving downward (toward camera) across frames."""
@@ -242,7 +248,10 @@ def test_wrong_way_stationary_does_not_flag():
     decision = check_wrong_way_candidate(track)
 
     assert decision.is_candidate is False
-    assert "stationary" in decision.reason or "Insufficient downward steps" in decision.reason
+    assert (
+        "stationary" in decision.reason
+        or "Insufficient downward steps" in decision.reason
+    )
 
 
 def test_wrong_way_erratic_noisy_motion_rejected():
@@ -258,4 +267,8 @@ def test_wrong_way_erratic_noisy_motion_rejected():
     decision = check_wrong_way_candidate(track)
 
     assert decision.is_candidate is False
-    assert "erratic" in decision.reason or "oscillating" in decision.reason or "Insufficient downward steps" in decision.reason
+    assert (
+        "erratic" in decision.reason
+        or "oscillating" in decision.reason
+        or "Insufficient downward steps" in decision.reason
+    )

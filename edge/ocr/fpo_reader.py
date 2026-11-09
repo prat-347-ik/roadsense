@@ -75,7 +75,9 @@ class FPOReader:
         if self._recognizer is None:
             from fast_plate_ocr import LicensePlateRecognizer
 
-            self._recognizer = LicensePlateRecognizer(self.model_name, device=self.device)
+            self._recognizer = LicensePlateRecognizer(
+                self.model_name, device=self.device
+            )
         return self._recognizer
 
     def read_plate(

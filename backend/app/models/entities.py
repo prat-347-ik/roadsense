@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Optional
+
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
@@ -50,13 +50,19 @@ incident_observations = Table(
 class Device(Base):
     __tablename__ = "devices"
     __table_args__ = (
-        CheckConstraint("status IN ('active', 'suspended', 'revoked')", name="ck_devices_status"),
+        CheckConstraint(
+            "status IN ('active', 'suspended', 'revoked')", name="ck_devices_status"
+        ),
     )
 
     device_id = Column(String(128), primary_key=True)
     public_key = Column(Text, nullable=False)
     trust_score = Column(Float, nullable=False, default=0.5)
-    registered_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    registered_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
     status = Column(String(32), nullable=False, default="active")
 
     observations = relationship("Observation", back_populates="device")
@@ -72,7 +78,11 @@ class Reviewer(Base):
     email = Column(String(320), nullable=False, unique=True)
     password_hash = Column(Text, nullable=False)
     role = Column(String(32), nullable=False, default="reviewer")
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
 
     reviewed_incidents = relationship("CandidateIncident", back_populates="reviewer")
 
@@ -145,7 +155,9 @@ class CandidateIncident(Base):
         secondary=incident_observations,
         back_populates="incidents",
     )
-    evidence_items = relationship("Evidence", back_populates="incident", cascade="all, delete-orphan")
+    evidence_items = relationship(
+        "Evidence", back_populates="incident", cascade="all, delete-orphan"
+    )
 
 
 class Evidence(Base):

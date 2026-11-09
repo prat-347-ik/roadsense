@@ -15,18 +15,16 @@ setting up reviewer credentials.
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Optional
-
-from fastapi import APIRouter, Query
 
 from app.services.sweeps import sweep_evidence_ttl, sweep_stale_observations
+from fastapi import APIRouter, Query
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
 
 @router.post("/sweep/stale-observations")
 async def trigger_stale_observation_sweep(
-    time_window_seconds: Optional[float] = Query(
+    time_window_seconds: float | None = Query(
         None,
         description=(
             "Override corroboration time window in seconds. "
@@ -45,7 +43,7 @@ async def trigger_stale_observation_sweep(
 
 @router.post("/sweep/evidence-ttl")
 async def trigger_evidence_ttl_sweep(
-    ttl_days: Optional[float] = Query(
+    ttl_days: float | None = Query(
         None,
         description=(
             "Override evidence TTL in days. "

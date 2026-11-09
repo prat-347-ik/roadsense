@@ -1,14 +1,178 @@
 from __future__ import annotations
 
-import collections
+import re
 from dataclasses import dataclass, field
 from typing import Any
+
 import numpy as np
 
 from edge.ocr.plate_reader import MIN_PLATE_WIDTH_GATING, read_plate
 
+VALID_INDIAN_STATES = {
+    "AP",
+    "AR",
+    "AS",
+    "BR",
+    "CG",
+    "GA",
+    "GJ",
+    "HR",
+    "HP",
+    "JH",
+    "JK",
+    "KA",
+    "KL",
+    "LA",
+    "LD",
+    "MH",
+    "ML",
+    "MN",
+    "MP",
+    "MZ",
+    "NL",
+    "OD",
+    "PB",
+    "PY",
+    "RJ",
+    "SK",
+    "TN",
+    "TS",
+    "UK",
+    "UP",
+    "WB",
+    "AN",
+    "CH",
+    "DD",
+    "DL",
+    "DN",
+}
 
-def compute_iou(box1: list[float] | np.ndarray, box2: list[float] | np.ndarray) -> float:
+LETTER_FROM_DIGIT = {"0": "O", "1": "I", "8": "B", "5": "S", "2": "Z", "6": "G"}
+DIGIT_FROM_LETTER = {
+    "O": "0",
+    "I": "1",
+    "B": "8",
+    "S": "5",
+    "Z": "2",
+    "G": "6",
+    "l": "1",
+    "o": "0",
+}
+
+STANDARD_PLATE_RE = re.compile(r"^([A-Z]{2})(\d{2})([A-Z]{1,3})(\d{3,4})$")
+BH_PLATE_RE = re.compile(r"^(\d{2})(BH)(\d{4})([A-Z]{1,2})$")
+
+
+def apply_positional_correction(text: str) -> str:
+    """Apply positional letter/digit corrections for standard Indian plates."""
+    if not text or len(text) < 7:
+        return text
+    t = list(text.upper())
+    for i in (0, 1):
+        if i < len(t) and t[i] in LETTER_FROM_DIGIT:
+            t[i] = LETTER_FROM_DIGIT[t[i]]
+    for i in (2, 3):
+        if i < len(t) and t[i] in DIGIT_FROM_LETTER:
+            t[i] = DIGIT_FROM_LETTER[t[i]]
+    if len(t) >= 9:
+        for i in (4, 5):
+            if i < len(t) and t[i] in DIGIT_FROM_LETTER:
+                t[i] = LETTER_FROM_DIGIT.get(t[i], t[i])
+        for i in range(6, len(t)):
+            if t[i] in DIGIT_FROM_LETTER:
+                t[i] = DIGIT_FROM_LETTER[t[i]]
+    return "".join(t)
+
+
+def validate_plate_format(text: str) -> tuple[str | None, str]:
+    if not text:
+        return None, "no_read"
+    t = text.upper().strip()
+    if m := BH_PLATE_RE.match(t):
+        return t, "BH"
+    if m := STANDARD_PLATE_RE.match(t):
+        if m.group(1) in VALID_INDIAN_STATES:
+            return t, "standard"
+        return t, "invalid_state"
+    return t, "invalid"
+
+
+def vote_plate_observations(
+    observations: list[tuple[int, str, float]],
+) -> tuple[str | None, float]:
+    """Multi-frame confidence-weighted plate voting.
+
+    1. Consecutive frames counted as one sample.
+    2. Format gating (standard Indian state formats and BH series).
+    3. Positional character confusion correction.
+    4. Confidence-weighted character voting across samples.
+    """
+    if not observations:
+        return None, 0.0
+
+    runs: list[list[tuple[int, str, float]]] = []
+    current_run: list[tuple[int, str, float]] = [observations[0]]
+    for obs in observations[1:]:
+        if obs[0] == current_run[-1][0] + 1:
+            current_run.append(obs)
+        else:
+            runs.append(current_run)
+            current_run = [obs]
+    runs.append(current_run)
+
+    deduped_samples: list[tuple[str, float]] = []
+    for run in runs:
+        valid_in_run: list[tuple[str, float]] = []
+        for _, raw_text, conf in run:
+            corr = apply_positional_correction(raw_text)
+            text, fmt = validate_plate_format(corr)
+            if fmt in ("standard", "BH", "invalid_state"):
+                valid_in_run.append((text, conf))
+        if valid_in_run:
+            deduped_samples.append(max(valid_in_run, key=lambda x: x[1]))
+        else:
+            best = max(run, key=lambda x: x[2])
+            deduped_samples.append((apply_positional_correction(best[1]), best[2]))
+
+    eligible = [
+        s
+        for s in deduped_samples
+        if validate_plate_format(s[0])[1] in ("standard", "BH", "invalid_state")
+    ]
+    if not eligible:
+        eligible = [s for s in deduped_samples if s[0]]
+    if not eligible:
+        return None, 0.0
+
+    from collections import defaultdict
+
+    pos_votes = defaultdict(lambda: defaultdict(float))
+    max_len = max(len(t) for t, _ in eligible)
+    for t, c in eligible:
+        for i, char in enumerate(t):
+            pos_votes[i][char] += c
+
+    voted_chars: list[str] = []
+    total_weights: list[float] = []
+    for i in range(max_len):
+        if pos_votes[i]:
+            best_char, w = max(pos_votes[i].items(), key=lambda item: item[1])
+            voted_chars.append(best_char)
+            total_weights.append(w)
+
+    voted_text = "".join(voted_chars)
+    sum_confs = sum(c for _, c in eligible)
+    avg_conf = (
+        (sum(total_weights) / (len(total_weights) * max(sum_confs, 1e-6)))
+        if total_weights
+        else 0.0
+    )
+    return voted_text, min(1.0, float(avg_conf))
+
+
+def compute_iou(
+    box1: list[float] | np.ndarray, box2: list[float] | np.ndarray
+) -> float:
     """Compute Intersection over Union (IoU) between two bounding boxes [x1, y1, x2, y2]."""
     x1 = max(box1[0], box2[0])
     y1 = max(box1[1], box2[1])
@@ -71,6 +235,10 @@ class Track:
     fpo_model: str = "cct-xs-v2-global-model"
     plate_min_conf: float = 0.0
     funnel_outcome: str | None = None
+    plate_vote: bool = False
+    plate_crops_history: list[tuple[int, np.ndarray, float]] = field(
+        default_factory=list
+    )
 
     def __post_init__(self) -> None:
         if not self.bbox_history and self.current_bbox:
@@ -95,6 +263,9 @@ class Track:
             return False
 
         pw = float(plate_bbox[2] - plate_bbox[0])
+        if self.plate_vote and plate_crop is not None and pw >= MIN_PLATE_WIDTH_GATING:
+            self.plate_crops_history.append((frame_idx, plate_crop, plate_score))
+
         if pw > self.best_plate_width:
             self.best_plate_width = pw
             self.best_plate_bbox = plate_bbox
@@ -133,20 +304,32 @@ class Track:
         x1, _, x2, y2 = bbox
         return float((x1 + x2) / 2.0), float(y2)
 
-    def get_bottom_center(self, frame_idx: int | None = None) -> tuple[float, float] | None:
+    def get_bottom_center(
+        self, frame_idx: int | None = None
+    ) -> tuple[float, float] | None:
         """Return the most recent or selected-frame bottom-center endpoint."""
         if not self.bbox_history:
             return None
-        target = self.bbox_history[-1] if frame_idx is None else next(
-            (frame, bbox) for frame, bbox in self.bbox_history if frame == frame_idx
+        target = (
+            self.bbox_history[-1]
+            if frame_idx is None
+            else next(
+                (frame, bbox) for frame, bbox in self.bbox_history if frame == frame_idx
+            )
         )
         return self.bottom_center_from_bbox(target[1])
 
-    def get_recent_bottom_centers(self, last_n_frames: int = 5) -> list[tuple[float, float]]:
+    def get_recent_bottom_centers(
+        self, last_n_frames: int = 5
+    ) -> list[tuple[float, float]]:
         """Return bottom-center positions over the recent trajectory window."""
         if len(self.bbox_history) < 2:
             return []
-        window = self.bbox_history[-last_n_frames:] if last_n_frames > 1 else self.bbox_history
+        window = (
+            self.bbox_history[-last_n_frames:]
+            if last_n_frames > 1
+            else self.bbox_history
+        )
         return [self.bottom_center_from_bbox(bbox) for _, bbox in window]
 
     def get_motion_vector(self, last_n_frames: int = 5) -> tuple[float, float] | None:
@@ -166,7 +349,11 @@ class Track:
         if len(self.bbox_history) < 2:
             return None
 
-        window = self.bbox_history[-last_n_frames:] if last_n_frames > 1 else self.bbox_history
+        window = (
+            self.bbox_history[-last_n_frames:]
+            if last_n_frames > 1
+            else self.bbox_history
+        )
         if len(window) < 2:
             return None
 
@@ -174,11 +361,17 @@ class Track:
         end = self.bottom_center_from_bbox(window[-1][1])
         return float(end[0] - start[0]), float(end[1] - start[1])
 
-    def get_step_displacements(self, last_n_frames: int = 5) -> list[tuple[float, float]]:
+    def get_step_displacements(
+        self, last_n_frames: int = 5
+    ) -> list[tuple[float, float]]:
         """Get consecutive frame-to-frame displacement vectors [(dx, dy), ...] over the window."""
         if len(self.bbox_history) < 2:
             return []
-        window = self.bbox_history[-last_n_frames:] if last_n_frames > 1 else self.bbox_history
+        window = (
+            self.bbox_history[-last_n_frames:]
+            if last_n_frames > 1
+            else self.bbox_history
+        )
         displacements = []
         for i in range(1, len(window)):
             _, b_prev = window[i - 1]
@@ -204,11 +397,44 @@ class Track:
         model = fpo_model or self.fpo_model
         min_conf = self.plate_min_conf if plate_min_conf is None else plate_min_conf
 
-        if self.best_plate_crop is not None and self.best_plate_width >= gating_threshold:
+        if self.plate_vote and self.plate_crops_history:
+            observations: list[tuple[int, str, float]] = []
+            for f_idx, crop, _ in self.plate_crops_history:
+                if engine == "fpo":
+                    from edge.ocr.fpo_reader import read_plate as fpo_read_plate
+
+                    res = fpo_read_plate(crop, model_name=model, return_confidence=True)
+                    if isinstance(res, tuple):
+                        t, c = res
+                    else:
+                        t, c = res, 1.0
+                else:
+                    t = read_plate(crop)
+                    c = 1.0 if t else 0.0
+                if t:
+                    observations.append((f_idx, t, float(c)))
+
+            if observations:
+                voted_text, voted_conf = vote_plate_observations(observations)
+                self.plate_text = voted_text
+                self.plate_confidence = voted_conf
+                if self.plate_text is not None:
+                    if min_conf > 0.0 and self.plate_confidence < min_conf:
+                        self.funnel_outcome = "OCR_LOW_CONFIDENCE"
+                    else:
+                        self.funnel_outcome = "OK"
+                return self.plate_text
+
+        if (
+            self.best_plate_crop is not None
+            and self.best_plate_width >= gating_threshold
+        ):
             if engine == "fpo":
                 from edge.ocr.fpo_reader import read_plate as fpo_read_plate
 
-                res = fpo_read_plate(self.best_plate_crop, model_name=model, return_confidence=True)
+                res = fpo_read_plate(
+                    self.best_plate_crop, model_name=model, return_confidence=True
+                )
                 if isinstance(res, tuple):
                     self.plate_text, self.plate_confidence = res
                 else:
@@ -248,6 +474,7 @@ class IOUTracker:
         plate_padding_ratio: float | None = None,
         fpo_padding: float | None = None,
         plate_min_conf: float = 0.0,
+        plate_vote: bool = False,
     ):
         if plate_assign not in ("first", "one_to_one"):
             raise ValueError(
@@ -261,6 +488,7 @@ class IOUTracker:
         self.ocr_engine = ocr_engine
         self.fpo_model = fpo_model
         self.plate_min_conf = plate_min_conf
+        self.plate_vote = plate_vote
 
         if fpo_padding is not None and ocr_engine == "fpo":
             self.plate_padding_ratio = fpo_padding
@@ -298,7 +526,7 @@ class IOUTracker:
         y2 = min(h_img, int(plate_bbox[3] + pad_y))
 
         if x2 > x1 and y2 > y1:
-            return frame_image[y1:y2, x1:x2]
+            return frame_image[y1:y2, x1:x2].copy()
         return None
 
     def _associate_plate(
@@ -326,7 +554,10 @@ class IOUTracker:
                     continue
                 pcx = (pb[0] + pb[2]) / 2.0
                 pcy = (pb[1] + pb[3]) / 2.0
-                if vehicle_bbox[0] <= pcx <= vehicle_bbox[2] and vehicle_bbox[1] <= pcy <= vehicle_bbox[3]:
+                if (
+                    vehicle_bbox[0] <= pcx <= vehicle_bbox[2]
+                    and vehicle_bbox[1] <= pcy <= vehicle_bbox[3]
+                ):
                     score = float(p_det.get("score", p_det.get("conf", 1.0)))
                     area = (pb[2] - pb[0]) * (pb[3] - pb[1])
                     if score > best_score or (score == best_score and area < best_area):
@@ -349,7 +580,10 @@ class IOUTracker:
                 continue
             pcx = (pb[0] + pb[2]) / 2.0
             pcy = (pb[1] + pb[3]) / 2.0
-            if vehicle_bbox[0] <= pcx <= vehicle_bbox[2] and vehicle_bbox[1] <= pcy <= vehicle_bbox[3]:
+            if (
+                vehicle_bbox[0] <= pcx <= vehicle_bbox[2]
+                and vehicle_bbox[1] <= pcy <= vehicle_bbox[3]
+            ):
                 crop = self._extract_crop(pb, frame_image)
                 score = float(p_det.get("score", p_det.get("conf", 1.0)))
                 return pb, crop, score
@@ -386,7 +620,9 @@ class IOUTracker:
             # Greedy one-to-one association across all vehicle detections in the frame
             candidates = []
             for v_idx, d in enumerate(detections):
-                v_box = d.bbox if isinstance(d, Detection) else d.get("bbox", d.get("box"))
+                v_box = (
+                    d.bbox if isinstance(d, Detection) else d.get("bbox", d.get("box"))
+                )
                 if v_box is None:
                     continue
                 v_area = (v_box[2] - v_box[0]) * (v_box[3] - v_box[1])
@@ -462,14 +698,20 @@ class IOUTracker:
                             plate_score=p_score,
                             plate_crop=p_crop,
                         )
-                    elif d.plate_bbox is not None and d.plate_crop is None and frame_image is not None:
+                    elif (
+                        d.plate_bbox is not None
+                        and d.plate_crop is None
+                        and frame_image is not None
+                    ):
                         d.plate_crop = self._extract_crop(d.plate_bbox, frame_image)
                     norm_dets.append(d)
                 else:
                     bbox = d.get("bbox", d.get("box"))
                     score = float(d.get("score", d.get("conf", 1.0)))
                     c_name = d.get("class_name", d.get("label", "vehicle"))
-                    p_bbox, p_crop, p_score = self._associate_plate(bbox, plate_detections, frame_image)
+                    p_bbox, p_crop, p_score = self._associate_plate(
+                        bbox, plate_detections, frame_image
+                    )
                     norm_dets.append(
                         Detection(
                             bbox=bbox,
@@ -482,7 +724,9 @@ class IOUTracker:
                     )
 
         active_track_ids = list(self.active_tracks.keys())
-        active_boxes = [self.active_tracks[tid].current_bbox for tid in active_track_ids]
+        active_boxes = [
+            self.active_tracks[tid].current_bbox for tid in active_track_ids
+        ]
         det_boxes = [d.bbox for d in norm_dets]
 
         # Match detections to existing tracks greedily by highest IOU
@@ -528,6 +772,7 @@ class IOUTracker:
                     ocr_engine=self.ocr_engine,
                     fpo_model=self.fpo_model,
                     plate_min_conf=self.plate_min_conf,
+                    plate_vote=self.plate_vote,
                 )
                 new_track.record_plate_observation(
                     plate_bbox=det.plate_bbox,
@@ -559,7 +804,9 @@ class IOUTracker:
             del self.active_tracks[tid]
 
         # Return confirmed active tracks
-        return [t for t in self.active_tracks.values() if t.age >= self.min_hits_to_confirm]
+        return [
+            t for t in self.active_tracks.values() if t.age >= self.min_hits_to_confirm
+        ]
 
 
 # Backward compatibility aliases

@@ -1,15 +1,15 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
+
 import logging
 import os
-from pathlib import Path
 import time
-from typing import Any, Callable, Protocol
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any, Protocol
 
 import numpy as np
 
 from edge.capture import FrameSource
-from edge.detection.detector import Detection as VehicleDetection
 from edge.detection.traffic_light_color import classify_traffic_light_color
 from edge.rules.red_light import (
     TrafficLightStateSmoother,
@@ -82,12 +82,10 @@ class PipelineMetrics:
                 else None
             ),
             "average_stage_ms": {
-                name: timing.average_ms
-                for name, timing in self.stage_timings.items()
+                name: timing.average_ms for name, timing in self.stage_timings.items()
             },
             "average_candidate_latency_ms": (
-                sum(self.end_to_end_candidate_ms)
-                / len(self.end_to_end_candidate_ms)
+                sum(self.end_to_end_candidate_ms) / len(self.end_to_end_candidate_ms)
                 if self.end_to_end_candidate_ms
                 else None
             ),
@@ -112,6 +110,11 @@ class PipelineConfig:
     max_frames: int | None = None
     duration_seconds: float | None = None
     plate_min_conf: float = 0.0
+    stop_line_y: float | None = None
+    light_roi: tuple[int, int, int, int] | None = None
+    light_mode: str = "detect"
+    vehicle_nms_class_agnostic: bool = False
+    sightline_ignore_candidate: bool = False
 
 
 @dataclass
@@ -162,15 +165,47 @@ class EdgePipeline:
 
         # A candidate is emitted only after its observation is successfully queued.
         self._emitted_tracks: set[tuple[int, str]] = set()
-        self._pending_candidates: dict[
-            tuple[int, str], _PendingCandidate
-        ] = {}
+        self._pending_candidates: dict[tuple[int, str], _PendingCandidate] = {}
 
         now = time.perf_counter()
         self._last_flush = now
         self._last_evidence_poll = now
         self._last_cpu_time = time.process_time()
         self._last_wall_time = time.perf_counter()
+
+    @staticmethod
+    def _box_iou(b1: list[float], b2: list[float]) -> float:
+        x1 = max(b1[0], b2[0])
+        y1 = max(b1[1], b2[1])
+        x2 = min(b1[2], b2[2])
+        y2 = min(b1[3], b2[3])
+        if x2 <= x1 or y2 <= y1:
+            return 0.0
+        ia = (x2 - x1) * (y2 - y1)
+        a1 = (b1[2] - b1[0]) * (b1[3] - b1[1])
+        a2 = (b2[2] - b2[0]) * (b2[3] - b2[1])
+        union = a1 + a2 - ia
+        return ia / union if union > 0 else 0.0
+
+    @classmethod
+    def _merge_car_truck_detections(
+        cls, detections: list[Detection], iou_threshold: float = 0.5
+    ) -> list[Detection]:
+        if not detections:
+            return []
+        sorted_dets = sorted(detections, key=lambda d: d.score, reverse=True)
+        kept: list[Detection] = []
+        for det in sorted_dets:
+            suppress = False
+            for k in kept:
+                classes = {det.class_name, k.class_name}
+                if "car" in classes and "truck" in classes:
+                    if cls._box_iou(det.bbox, k.bbox) > iou_threshold:
+                        suppress = True
+                        break
+            if not suppress:
+                kept.append(det)
+        return kept
 
     def _sample_process_metrics(self) -> None:
         try:
@@ -182,32 +217,33 @@ class EdgePipeline:
             wall_delta = now_wall - self._last_wall_time
             cpu_delta = now_cpu - self._last_cpu_time
 
-            self.metrics.memory_mb.append(
-                process.memory_info().rss / (1024 * 1024)
-            )
+            self.metrics.memory_mb.append(process.memory_info().rss / (1024 * 1024))
             if wall_delta > 0:
-                self.metrics.cpu_percent.append(
-                    100.0 * cpu_delta / wall_delta
-                )
+                self.metrics.cpu_percent.append(100.0 * cpu_delta / wall_delta)
 
             self._last_wall_time = now_wall
             self._last_cpu_time = now_cpu
         except ImportError:
-            logger.warning(
-                "psutil is unavailable; memory telemetry will be omitted."
-            )
+            logger.warning("psutil is unavailable; memory telemetry will be omitted.")
 
-    def _traffic_light_color(
-        self, frame: np.ndarray, detections: list[Any]
-    ) -> str:
+    def _traffic_light_color(self, frame: np.ndarray, detections: list[Any]) -> str:
+        if self.config.light_mode == "roi":
+            if self.config.light_roi is not None:
+                x1, y1, x2, y2 = (max(0, int(value)) for value in self.config.light_roi)
+                crop = frame[y1:y2, x1:x2]
+                if crop.size:
+                    obs = classify_traffic_light_color(
+                        crop, min_relative_signal_ratio=0.03
+                    )
+                    return self.traffic_light_smoother.update(obs)
+            return self.traffic_light_smoother.state
+
         colors = []
         for detection in detections:
             if getattr(detection, "class_name", None) != "traffic light":
                 continue
 
-            x1, y1, x2, y2 = (
-                max(0, int(value)) for value in detection.bbox
-            )
+            x1, y1, x2, y2 = (max(0, int(value)) for value in detection.bbox)
             crop = frame[y1:y2, x1:x2]
             if crop.size:
                 colors.append(classify_traffic_light_color(crop))
@@ -234,10 +270,7 @@ class EdgePipeline:
         )
         key = (track.track_id, violation_type)
 
-        if (
-            key in self._emitted_tracks
-            or key in self._pending_candidates
-        ):
+        if key in self._emitted_tracks or key in self._pending_candidates:
             return
 
         # Preserve the original decision and frame. Do not rerun the rules
@@ -263,9 +296,7 @@ class EdgePipeline:
         # The tracker finalizes OCR as tracks expire. Lost tracks are not
         # necessarily returned in the active-track list for this frame.
         finalized_ids.update(
-            track.track_id
-            for track in self.tracker.lost_tracks
-            if track.ocr_attempted
+            track.track_id for track in self.tracker.lost_tracks if track.ocr_attempted
         )
 
         for key, pending in list(self._pending_candidates.items()):
@@ -274,18 +305,13 @@ class EdgePipeline:
                 continue
 
             track = pending.track
-            is_finalized = (
-                track.track_id in finalized_ids
-                or track.ocr_attempted
-            )
+            is_finalized = track.track_id in finalized_ids or track.ocr_attempted
             if (
                 not is_finalized
                 and now - pending.captured_at
                 >= self.config.pending_candidate_timeout_seconds
             ):
-                track.finalize_ocr(
-                    gating_threshold=self.tracker.gating_threshold
-                )
+                track.finalize_ocr(gating_threshold=self.tracker.gating_threshold)
                 is_finalized = True
                 logger.warning(
                     "Candidate track=%s type=%s reached OCR timeout; "
@@ -425,6 +451,11 @@ class EdgePipeline:
             if getattr(prediction, "class_name", None)
             in {"car", "truck", "bus", "motorcycle"}
         ]
+        if self.config.vehicle_nms_class_agnostic:
+            vehicle_detections = self._merge_car_truck_detections(
+                vehicle_detections, iou_threshold=0.5
+            )
+
         plate_detections = [
             {
                 "bbox": list(prediction.bbox),
@@ -443,14 +474,10 @@ class EdgePipeline:
             frame_image=frame,
             plate_detections=plate_detections,
         )
-        self.metrics.stage_timings["tracking"].add(
-            time.perf_counter() - stage_start
-        )
+        self.metrics.stage_timings["tracking"].add(time.perf_counter() - stage_start)
 
         stage_start = time.perf_counter()
-        signal_color = self._traffic_light_color(
-            frame, vehicle_predictions
-        )
+        signal_color = self._traffic_light_color(frame, vehicle_predictions)
         blocked = is_sightline_blocked(
             tracks,
             frame_width=frame.shape[1],
@@ -464,29 +491,35 @@ class EdgePipeline:
                 frame_height=frame.shape[0],
             )
             if wrong_way.is_candidate:
-                self._emit_candidate(
-                    track, wrong_way, frame, location, frame_start
+                self._emit_candidate(track, wrong_way, frame, location, frame_start)
+
+            if self.config.sightline_ignore_candidate:
+                track_blocked = is_sightline_blocked(
+                    tracks,
+                    frame_width=frame.shape[1],
+                    frame_height=frame.shape[0],
+                    candidate_track=track,
+                    ignore_candidate=True,
                 )
+            else:
+                track_blocked = blocked
 
             red_light = check_red_light_candidate(
                 track,
                 signal_color,
                 frame_width=frame.shape[1],
                 frame_height=frame.shape[0],
-                sightline_blocked=blocked,
+                stop_line_y=self.config.stop_line_y,
+                sightline_blocked=track_blocked,
             )
             if red_light.is_candidate:
-                self._emit_candidate(
-                    track, red_light, frame, location, frame_start
-                )
+                self._emit_candidate(track, red_light, frame, location, frame_start)
 
         # Resolve candidates whose tracks may have been finalized by update(),
         # even when those tracks are no longer in the active tracks list.
         self._resolve_pending_candidates()
 
-        self.metrics.stage_timings["rules"].add(
-            time.perf_counter() - stage_start
-        )
+        self.metrics.stage_timings["rules"].add(time.perf_counter() - stage_start)
         self.metrics.frames += 1
         self._sample_process_metrics()
 
@@ -502,10 +535,7 @@ class EdgePipeline:
                 )
             self._last_flush = now
 
-        if (
-            now - self._last_evidence_poll
-            >= self.config.evidence_poll_interval_seconds
-        ):
+        if now - self._last_evidence_poll >= self.config.evidence_poll_interval_seconds:
             try:
                 for request in self.client.poll_evidence_requests(
                     self.config.device_id
@@ -528,8 +558,7 @@ class EdgePipeline:
     def _finalize_pending_candidates(self) -> None:
         """Finalize pending tracks when capture stops, including at EOF."""
         pending_track_ids = {
-            pending.track.track_id
-            for pending in self._pending_candidates.values()
+            pending.track.track_id for pending in self._pending_candidates.values()
         }
         finalized_ids: set[int] = set()
 
@@ -560,9 +589,7 @@ class EdgePipeline:
             if track.ocr_attempted:
                 finalized_ids.add(track_id)
 
-        self._resolve_pending_candidates(
-            finalized_track_ids=finalized_ids
-        )
+        self._resolve_pending_candidates(finalized_track_ids=finalized_ids)
 
     def run(self) -> PipelineMetrics:
         started = time.perf_counter()
@@ -589,10 +616,14 @@ class EdgePipeline:
                     time.sleep(next_frame_at - now)
 
                 capture_start = time.perf_counter()
-                frame = self.source.get_frame()
-                location = (
-                    self.source.get_location() or self.config.location
-                )
+                try:
+                    frame = self.source.get_frame()
+                except StopIteration:
+                    logger.info(
+                        "Capture source exhausted at frame %d; stopping.", frame_idx
+                    )
+                    break
+                location = self.source.get_location() or self.config.location
                 self.metrics.stage_timings["capture"].add(
                     time.perf_counter() - capture_start
                 )
@@ -607,9 +638,7 @@ class EdgePipeline:
                         or getattr(self.source, "fps", 0.0)
                         or 1.0
                     )
-                    next_frame_at = (
-                        max(next_frame_at, time.perf_counter()) + 1.0 / fps
-                    )
+                    next_frame_at = max(next_frame_at, time.perf_counter()) + 1.0 / fps
 
         finally:
             try:

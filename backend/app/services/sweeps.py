@@ -34,22 +34,19 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import List
-
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.db.session import get_session_factory
-from app.models.entities import CandidateIncident, Evidence, Observation
-from app.services.clustering import evaluate_evidence_timeout, IncidentClusteringStatus
+from app.models.entities import CandidateIncident
+from app.services.clustering import IncidentClusteringStatus, evaluate_evidence_timeout
 from app.services.progression import (
     ObservationPoint,
     ProgressionStatus,
-    RejectionReason,
     evaluate_stale_observation,
 )
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 logger = logging.getLogger(__name__)
 
@@ -231,7 +228,10 @@ async def sweep_evidence_ttl(
                     if req_time is None and ev.retention_expires_at is not None:
                         req_time = ev.retention_expires_at - ttl
                     if req_time is not None:
-                        if earliest_request_time is None or req_time < earliest_request_time:
+                        if (
+                            earliest_request_time is None
+                            or req_time < earliest_request_time
+                        ):
                             earliest_request_time = req_time
 
                 if earliest_request_time is None:
@@ -263,7 +263,9 @@ async def sweep_evidence_ttl(
         except Exception as exc:
             error_count += 1
             failed.append({"incident_id": incident_id, "error": str(exc)})
-            logger.exception("Evidence TTL sweep failed for incident %d: %s", incident_id, exc)
+            logger.exception(
+                "Evidence TTL sweep failed for incident %d: %s", incident_id, exc
+            )
 
     summary = {
         "job": "sweep_evidence_ttl",

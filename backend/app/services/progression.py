@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import List, Optional
 
 from app.services.geo import calculate_bearing, haversine_distance_meters
 
@@ -27,17 +26,17 @@ class ObservationPoint:
     device_id: str
     event_nonce: str
     hashed_plate: str
-    wrong_way_status: Optional[str] = None
+    wrong_way_status: str | None = None
 
 
 @dataclass
 class ProgressionEvaluationResult:
     status: ProgressionStatus
-    reason: Optional[RejectionReason] = None
+    reason: RejectionReason | None = None
     displacement_meters: float = 0.0
     elapsed_seconds: float = 0.0
     speed_mps: float = 0.0
-    bearing_deg: Optional[float] = None
+    bearing_deg: float | None = None
     details: str = ""
 
 
@@ -50,7 +49,7 @@ def calculate_bearing_difference(b1: float, b2: float) -> float:
 def evaluate_stale_observation(
     obs: ObservationPoint,
     time_window_seconds: float = 300.0,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> ProgressionEvaluationResult:
     """Evaluate a solitary unconfirmed observation that has aged past the corroboration time window.
 
@@ -81,14 +80,14 @@ def evaluate_stale_observation(
 
 def evaluate_wrong_way_progression(
     new_obs: ObservationPoint,
-    prior_observations: List[ObservationPoint],
+    prior_observations: list[ObservationPoint],
     parked_threshold_meters: float = 8.0,
     min_movement_meters: float = 12.0,
     min_speed_mps: float = 1.0,
     max_speed_mps: float = 60.0,
     time_window_seconds: float = 300.0,
     max_bearing_deviation_deg: float = 60.0,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> ProgressionEvaluationResult:
     """Evaluate wrong-way progression across a sequence of observations sharing the same hashed plate.
 
@@ -108,7 +107,9 @@ def evaluate_wrong_way_progression(
     """
     if not prior_observations:
         if now is not None:
-            return evaluate_stale_observation(new_obs, time_window_seconds=time_window_seconds, now=now)
+            return evaluate_stale_observation(
+                new_obs, time_window_seconds=time_window_seconds, now=now
+            )
         return ProgressionEvaluationResult(
             status=ProgressionStatus.UNCONFIRMED,
             details="First observation for plate; awaiting corroboration.",
@@ -169,11 +170,15 @@ def evaluate_wrong_way_progression(
         for i in range(len(all_points) - 1):
             p_curr = all_points[i]
             p_next = all_points[i + 1]
-            seg_dist = haversine_distance_meters(p_curr.lat, p_curr.lon, p_next.lat, p_next.lon)
+            seg_dist = haversine_distance_meters(
+                p_curr.lat, p_curr.lon, p_next.lat, p_next.lon
+            )
 
             # Check segments with meaningful displacement (> 3 meters to filter sub-meter GPS noise)
             if seg_dist >= 3.0:
-                seg_bearing = calculate_bearing(p_curr.lat, p_curr.lon, p_next.lat, p_next.lon)
+                seg_bearing = calculate_bearing(
+                    p_curr.lat, p_curr.lon, p_next.lat, p_next.lon
+                )
                 bearing_dev = calculate_bearing_difference(seg_bearing, overall_bearing)
 
                 if bearing_dev > max_bearing_deviation_deg:
@@ -185,7 +190,7 @@ def evaluate_wrong_way_progression(
                         speed_mps=calculated_speed,
                         bearing_deg=overall_bearing,
                         details=(
-                            f"Inconsistent trajectory: segment {i}->{i+1} bearing {seg_bearing:.1f}° "
+                            f"Inconsistent trajectory: segment {i}->{i + 1} bearing {seg_bearing:.1f}° "
                             f"deviates by {bearing_dev:.1f}° from overall bearing {overall_bearing:.1f}° "
                             f"(tolerance: {max_bearing_deviation_deg:.1f}°)."
                         ),

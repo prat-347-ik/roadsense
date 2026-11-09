@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import json
 import logging
-from pathlib import Path
 import shutil
 import sqlite3
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import cv2
@@ -112,7 +111,9 @@ class EvidenceBuffer:
         if isinstance(data, (str, Path)):
             src_path = Path(data)
             if not src_path.exists():
-                raise FileNotFoundError(f"Source evidence media not found at: {src_path}")
+                raise FileNotFoundError(
+                    f"Source evidence media not found at: {src_path}"
+                )
             suffix = src_path.suffix.lower() or ".mp4"
             dest_path = self.buffer_dir / f"{event_nonce}{suffix}"
             shutil.copy2(src_path, dest_path)
@@ -131,7 +132,9 @@ class EvidenceBuffer:
             cv2.imwrite(str(dest_path), data)
             fmt = "jpg"
 
-        elif isinstance(data, list) and len(data) > 0 and isinstance(data[0], np.ndarray):
+        elif (
+            isinstance(data, list) and len(data) > 0 and isinstance(data[0], np.ndarray)
+        ):
             # Sequence of numpy frames -> encode into MP4 video clip
             dest_path = self.buffer_dir / f"{event_nonce}.mp4"
             h, w = data[0].shape[:2]
@@ -155,7 +158,15 @@ class EvidenceBuffer:
                     event_nonce, file_path, format, size_bytes, created_at, expires_at, metadata
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (event_nonce, str(dest_path.resolve()), fmt, size_bytes, now, expires_at, meta_json),
+                (
+                    event_nonce,
+                    str(dest_path.resolve()),
+                    fmt,
+                    size_bytes,
+                    now,
+                    expires_at,
+                    meta_json,
+                ),
             )
             conn.commit()
 
@@ -167,7 +178,9 @@ class EvidenceBuffer:
         )
         return dest_path
 
-    def get_clip(self, event_nonce: str, current_time: float | None = None) -> Path | None:
+    def get_clip(
+        self, event_nonce: str, current_time: float | None = None
+    ) -> Path | None:
         """Retrieves path to buffered evidence clip if present and unexpired.
 
         Args:
@@ -189,7 +202,10 @@ class EvidenceBuffer:
                 return None
 
             if row["expires_at"] <= now:
-                logger.info("Evidence for nonce '%s' has expired (TTL passed); returning None.", event_nonce)
+                logger.info(
+                    "Evidence for nonce '%s' has expired (TTL passed); returning None.",
+                    event_nonce,
+                )
                 return None
 
             clip_path = Path(row["file_path"])
@@ -225,15 +241,22 @@ class EvidenceBuffer:
                         file_path.unlink()
                         logger.info("Deleted expired evidence file: %s", file_path)
                 except Exception as del_err:
-                    logger.error("Failed to delete expired file %s: %s", file_path, del_err)
+                    logger.error(
+                        "Failed to delete expired file %s: %s", file_path, del_err
+                    )
 
-                conn.execute("DELETE FROM evidence_clips WHERE event_nonce = ?", (nonce,))
+                conn.execute(
+                    "DELETE FROM evidence_clips WHERE event_nonce = ?", (nonce,)
+                )
                 pruned_count += 1
 
             conn.commit()
 
         if pruned_count > 0:
-            logger.info("EvidenceBuffer cleanup completed: pruned %d expired clip(s)", pruned_count)
+            logger.info(
+                "EvidenceBuffer cleanup completed: pruned %d expired clip(s)",
+                pruned_count,
+            )
         return pruned_count
 
     def start_periodic_cleanup(self, interval_seconds: float = 3600.0) -> None:
@@ -244,7 +267,10 @@ class EvidenceBuffer:
         self._stop_cleanup_event.clear()
 
         def _cleanup_loop():
-            logger.info("Started periodic evidence cleanup thread (interval: %.1fs)", interval_seconds)
+            logger.info(
+                "Started periodic evidence cleanup thread (interval: %.1fs)",
+                interval_seconds,
+            )
             while not self._stop_cleanup_event.is_set():
                 try:
                     self.cleanup_expired()
@@ -252,7 +278,9 @@ class EvidenceBuffer:
                     logger.error("Error during scheduled evidence cleanup: %s", err)
                 self._stop_cleanup_event.wait(interval_seconds)
 
-        self._cleanup_thread = threading.Thread(target=_cleanup_loop, daemon=True, name="EvidenceCleanupThread")
+        self._cleanup_thread = threading.Thread(
+            target=_cleanup_loop, daemon=True, name="EvidenceCleanupThread"
+        )
         self._cleanup_thread.start()
 
     def stop_periodic_cleanup(self) -> None:
