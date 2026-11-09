@@ -10,29 +10,31 @@ RoadSense is a crowd-sourced, privacy-preserving dashcam traffic violation detec
 The full end-to-end data flow operates from edge perception to human verification:
 
 ```mermaid
-flowchart TD
-    subgraph EdgeDevice["Dashcam / Edge Device"]
-        A["Input Video Stream / Dashcam"] --> B["YOLO11n<br/>(Vehicle & Traffic Light Detection)"]
-        B --> C["YOLOv8s<br/>(Plate Detection - stretch640)"]
-        C --> D["fast-plate-ocr cct-xs-v2<br/>(High-Speed Text Recognition)"]
-        B --> E["IOU Tracker<br/>(One-to-One Association & Voting)"]
-        D --> E
-        E --> F["Rule Engine<br/>(Red-Light & Wrong-Way Verification)"]
-        F --> G["SHA-256 / HMAC-SHA256<br/>(Irreversible Plate Hash)"]
-    end
+sequenceDiagram
+    autonumber
+    actor Cam as Dashcam (Edge Device)
+    participant Y1 as YOLO11n<br/>(Vehicles + Signals)
+    participant Y2 as YOLOv8s<br/>(Plate Detection)
+    participant OCR as fast-plate-ocr<br/>cct-xs-v2
+    participant Trk as IOU Tracker<br/>+ Rule Engine
+    participant API as FastAPI Backend<br/>(Docker)
+    participant PG as PostgreSQL<br/>PostGIS
+    participant S3 as MinIO<br/>(Evidence Store)
+    participant UI as Reviewer UI<br/>(Pending)
 
-    subgraph BackendStack["FastAPI Backend (Docker Compose)"]
-        G --> H["FastAPI Ingestion Endpoint<br/>(/v1/observations)"]
-        H --> I[("PostgreSQL / PostGIS<br/>Observation & Incident Store")]
-        I --> J["Spatio-Temporal Corroboration Engine<br/>(100m radius, 300s window)"]
-        J --> K["Evidence Retrieval Trigger<br/>(>= 2 independent devices)"]
-        K --> L[("MinIO Object Storage<br/>Evidence Frames & Video Clips")]
-    end
-
-    subgraph ReviewPipeline["Human Reviewer Verification"]
-        L --> M["Presigned Video & Telemetry Delivery"]
-        M --> N["Human Reviewer UI<br/>(Pending / Under Development)"]
-    end
+    Cam->>Y1: frame crops + bboxes
+    Y1->>Y2: vehicle track + ROI (IOU-matched bbox → plate crop)
+    Y2->>OCR: plate crop ≥35px · stretch-640 · 10% padding
+    OCR->>Trk: raw OCR text · fast-plate-ocr cct-xs-v2
+    Trk->>Trk: rule eval · red-light / wrong-way check
+    Trk-->>Cam: violation flag + plate · one-to-one assignment
+    Cam->>Cam: SHA-256 hash + sign · privacy: plate never stored raw
+    Cam->>API: POST /observations · { hash, signal_state, coords, ts }
+    API->>PG: INSERT observation · PostGIS ST_GeomFromText
+    API->>S3: PUT evidence frame · MinIO object store · S3-compat
+    PG-->>API: observation_id
+    API-->>Cam: 201 Created · observation_id · latency_ms
+    UI-->>API: GET /reports (pending) · human reviewer — not yet built
 ```
 
 ---
